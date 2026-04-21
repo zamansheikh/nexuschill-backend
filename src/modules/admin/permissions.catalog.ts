@@ -1,0 +1,213 @@
+/**
+ * System permissions catalog.
+ *
+ * Format: `resource.action`
+ * Wildcards supported at role level:
+ *   '*'          → all permissions
+ *   'users.*'    → all actions on users
+ *   'users.ban'  → exact permission
+ *
+ * Add new permissions here as new features are built.
+ */
+
+export const PERMISSIONS = {
+  ALL: '*',
+
+  // Admin management (super_admin territory)
+  ADMIN_VIEW: 'admin.view',
+  ADMIN_CREATE: 'admin.create',
+  ADMIN_UPDATE: 'admin.update',
+  ADMIN_DELETE: 'admin.delete',
+  ADMIN_ROLE_MANAGE: 'admin.role.manage',
+
+  // App users
+  USERS_VIEW: 'users.view',
+  USERS_EDIT: 'users.edit',
+  USERS_BAN: 'users.ban',
+  USERS_BALANCE: 'users.balance',
+  USERS_DELETE: 'users.delete',
+
+  // Hosts / broadcasters
+  HOSTS_VIEW: 'hosts.view',
+  HOSTS_APPROVE: 'hosts.approve',
+  HOSTS_REVOKE: 'hosts.revoke',
+  HOSTS_ASSIGN_AGENCY: 'hosts.assign_agency',
+
+  // Rooms / live content
+  ROOMS_VIEW: 'rooms.view',
+  ROOMS_MONITOR: 'rooms.monitor',
+  ROOMS_CLOSE: 'rooms.close',
+
+  // Gifts
+  GIFTS_VIEW: 'gifts.view',
+  GIFTS_MANAGE: 'gifts.manage',
+
+  // Recharge
+  RECHARGE_VIEW: 'recharge.view',
+  RECHARGE_REFUND: 'recharge.refund',
+  RECHARGE_PACKAGE_MANAGE: 'recharge.package.manage',
+
+  // Withdrawal
+  WITHDRAWAL_VIEW: 'withdrawal.view',
+  WITHDRAWAL_APPROVE: 'withdrawal.approve',
+  WITHDRAWAL_REJECT: 'withdrawal.reject',
+
+  // Agency
+  AGENCY_VIEW: 'agency.view',
+  AGENCY_MANAGE: 'agency.manage',
+  AGENCY_ASSIGN_HOST: 'agency.assign_host',
+
+  // Reseller
+  RESELLER_VIEW: 'reseller.view',
+  RESELLER_MANAGE: 'reseller.manage',
+  RESELLER_DISTRIBUTE_COINS: 'reseller.distribute_coins',
+
+  // Moderation
+  MODERATION_VIEW: 'moderation.view',
+  MODERATION_ACTION: 'moderation.action',
+  MODERATION_APPEALS: 'moderation.appeals',
+
+  // Store
+  STORE_VIEW: 'store.view',
+  STORE_MANAGE: 'store.manage',
+
+  // VIP / SVIP
+  VIP_VIEW: 'vip.view',
+  VIP_MANAGE: 'vip.manage',
+
+  // Families
+  FAMILY_VIEW: 'family.view',
+  FAMILY_MANAGE: 'family.manage',
+
+  // Reports & analytics
+  REPORTS_VIEW: 'reports.view',
+  REPORTS_EXPORT: 'reports.export',
+
+  // System
+  SYSTEM_CONFIG: 'system.config',
+  SYSTEM_AUDIT_LOG: 'system.audit_log',
+} as const;
+
+export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+
+/**
+ * Check if a set of granted permissions satisfies a required permission.
+ * Supports '*' (all) and prefix wildcard (e.g. 'users.*').
+ */
+export function hasPermission(granted: string[], required: string): boolean {
+  if (granted.includes('*')) return true;
+  if (granted.includes(required)) return true;
+
+  const parts = required.split('.');
+  for (let i = parts.length - 1; i > 0; i--) {
+    const wildcard = parts.slice(0, i).join('.') + '.*';
+    if (granted.includes(wildcard)) return true;
+  }
+  return false;
+}
+
+/**
+ * Default system roles — created on first boot, cannot be deleted.
+ * Permissions can still be edited by a super_admin.
+ */
+export const DEFAULT_ROLES = [
+  {
+    name: 'super_admin',
+    displayName: 'Super Admin',
+    description: 'Full platform access. Cannot be deleted.',
+    permissions: [PERMISSIONS.ALL],
+    isSystem: true,
+    priority: 100,
+  },
+  {
+    name: 'admin',
+    displayName: 'Admin',
+    description: 'General platform admin — most actions except admin/role management.',
+    permissions: [
+      'users.*',
+      'hosts.*',
+      'rooms.*',
+      'gifts.*',
+      'recharge.view',
+      'recharge.refund',
+      'withdrawal.*',
+      'moderation.*',
+      'store.*',
+      'vip.*',
+      'family.*',
+      'agency.view',
+      'reseller.view',
+      'reports.*',
+    ],
+    isSystem: true,
+    priority: 80,
+  },
+  {
+    name: 'moderator',
+    displayName: 'Moderator',
+    description: 'Handles content moderation and user reports.',
+    permissions: [
+      'users.view',
+      'users.ban',
+      'rooms.view',
+      'rooms.monitor',
+      'rooms.close',
+      'moderation.*',
+    ],
+    isSystem: true,
+    priority: 60,
+  },
+  {
+    name: 'finance',
+    displayName: 'Finance',
+    description: 'Recharge, withdrawal, and financial reports.',
+    permissions: [
+      'recharge.*',
+      'withdrawal.*',
+      'reports.*',
+      'users.view',
+    ],
+    isSystem: true,
+    priority: 70,
+  },
+  {
+    name: 'support',
+    displayName: 'Support Agent',
+    description: 'Customer support — read-only plus limited user edits.',
+    permissions: [
+      'users.view',
+      'users.edit',
+      'recharge.view',
+      'withdrawal.view',
+      'moderation.view',
+    ],
+    isSystem: true,
+    priority: 40,
+  },
+  {
+    name: 'agency',
+    displayName: 'Agency Manager',
+    description: 'Manages hosts assigned to their agency only (scope-restricted).',
+    permissions: [
+      'hosts.view',
+      'hosts.assign_agency',
+      'agency.view',
+      'reports.view',
+    ],
+    isSystem: true,
+    priority: 50,
+  },
+  {
+    name: 'reseller',
+    displayName: 'Reseller',
+    description: 'Distributes coins to their assigned users (scope-restricted).',
+    permissions: [
+      'users.view',
+      'recharge.view',
+      'reseller.view',
+      'reseller.distribute_coins',
+    ],
+    isSystem: true,
+    priority: 30,
+  },
+];

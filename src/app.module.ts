@@ -1,0 +1,75 @@
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { LoggerModule } from 'nestjs-pino';
+
+import { AppController } from './app.controller';
+import { configuration } from './config/configuration';
+import { validateEnv } from './config/env.validation';
+import { DatabaseModule } from './database/database.module';
+import { RedisModule } from './redis/redis.module';
+import { AdminModule } from './modules/admin/admin.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { UsersModule } from './modules/users/users.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      cache: true,
+      load: [configuration],
+      validate: validateEnv,
+    }),
+
+    LoggerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        pinoHttp: {
+          level: config.get<string>('nodeEnv') === 'production' ? 'info' : 'debug',
+          transport:
+            config.get<string>('nodeEnv') === 'production'
+              ? undefined
+              : {
+                  target: 'pino-pretty',
+                  options: { singleLine: true, colorize: true, translateTime: 'HH:MM:ss' },
+                },
+          redact: {
+            paths: [
+              'req.headers.authorization',
+              'req.headers.cookie',
+              '*.password',
+              '*.refreshToken',
+              '*.otp',
+            ],
+            remove: true,
+          },
+          customProps: (req) => ({ traceId: (req as any).traceId }),
+        },
+      }),
+    }),
+
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => [
+        {
+          name: 'default',
+          ttl: config.get<number>('throttle.ttl', 60) * 1000,
+          limit: config.get<number>('throttle.limit', 100),
+        },
+      ],
+    }),
+
+    DatabaseModule,
+    RedisModule,
+
+    UsersModule,
+    AuthModule,
+    AdminModule,
+  ],
+  controllers: [AppController],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
+})
+export class AppModule {}
