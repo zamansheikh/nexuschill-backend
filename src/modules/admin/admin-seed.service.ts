@@ -25,15 +25,29 @@ export class AdminSeedService implements OnApplicationBootstrap {
 
   private async seedRoles() {
     let createdCount = 0;
+    let patchedCount = 0;
     for (const r of DEFAULT_ROLES) {
       const existing = await this.roleModel.findOne({ name: r.name }).exec();
       if (!existing) {
         await this.roleModel.create({ ...r, active: true });
         createdCount++;
+      } else if (existing.isSystem) {
+        // Keep admin-customized permissions, but ensure structural fields
+        // (scopeType / isSystem) match the current catalog. This lets us ship
+        // schema-level fixes without losing permission edits.
+        const desiredScope = (r as any).scopeType ?? null;
+        if (existing.scopeType !== desiredScope) {
+          existing.scopeType = desiredScope;
+          await existing.save();
+          patchedCount++;
+        }
       }
     }
     if (createdCount > 0) {
       this.logger.log(`Seeded ${createdCount} default admin role(s)`);
+    }
+    if (patchedCount > 0) {
+      this.logger.log(`Patched scopeType on ${patchedCount} existing system role(s)`);
     }
   }
 

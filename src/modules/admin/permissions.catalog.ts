@@ -195,6 +195,7 @@ export const DEFAULT_ROLES = [
       'reports.view',
     ],
     isSystem: true,
+    scopeType: 'agency' as const,
     priority: 50,
   },
   {
@@ -208,6 +209,7 @@ export const DEFAULT_ROLES = [
       'reseller.distribute_coins',
     ],
     isSystem: true,
+    scopeType: 'reseller' as const,
     priority: 30,
   },
 ];
