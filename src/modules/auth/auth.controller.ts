@@ -6,6 +6,7 @@ import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-
 import { Public } from '../../common/decorators/public.decorator';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
+import { GoogleLoginDto } from './dto/google-login.dto';
 import { LoginEmailDto } from './dto/login-email.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterEmailDto } from './dto/register-email.dto';
@@ -49,6 +50,18 @@ export class AuthController {
   async sendOtp(@Body() dto: SendOtpDto) {
     const r = await this.auth.sendPhoneOtp(dto.phone);
     return { sent: true, cooldownSeconds: r.cooldownSeconds };
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('login/google')
+  async loginGoogle(@Body() dto: GoogleLoginDto, @Req() req: Request) {
+    const result = await this.auth.loginWithGoogle({
+      idToken: dto.idToken,
+      context: { userAgent: req.headers['user-agent'], ipAddress: req.ip },
+    });
+    return { ...this.shape(result), isNewUser: result.isNewUser };
   }
 
   @Public()

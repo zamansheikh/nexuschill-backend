@@ -74,6 +74,42 @@ export class UsersService {
     });
   }
 
+  /** Find an existing user by Google sub OR by email (email-verified Google login). */
+  async findByGoogleIdOrEmail(googleId: string, email: string): Promise<UserDocument | null> {
+    return this.userModel
+      .findOne({ $or: [{ googleId }, { email: email.toLowerCase() }] })
+      .exec();
+  }
+
+  async createWithGoogle(params: {
+    email: string;
+    googleId: string;
+    displayName?: string;
+    avatarUrl?: string;
+  }): Promise<UserDocument> {
+    return this.userModel.create({
+      email: params.email.toLowerCase(),
+      googleId: params.googleId,
+      displayName: params.displayName ?? '',
+      avatarUrl: params.avatarUrl ?? '',
+      providers: [AuthProvider.GOOGLE],
+      emailVerified: true,
+    });
+  }
+
+  /** Attach a Google id to an existing user (signed up by email originally). */
+  async linkGoogle(userId: string, googleId: string): Promise<void> {
+    await this.userModel
+      .updateOne(
+        { _id: userId, googleId: { $in: [null, googleId] } },
+        {
+          $set: { googleId, emailVerified: true },
+          $addToSet: { providers: AuthProvider.GOOGLE },
+        },
+      )
+      .exec();
+  }
+
   async markLogin(id: string): Promise<void> {
     await this.userModel.updateOne({ _id: id }, { $set: { lastLoginAt: new Date() } }).exec();
   }

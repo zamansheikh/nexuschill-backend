@@ -1,8 +1,8 @@
 {
-  "name": "party-app-backend",
+  "name": "nexuschill-backend",
   "version": "0.1.0",
-  "description": "Party App backend — Node.js + NestJS + MongoDB + Redis",
-  "author": "Party App Team",
+  "description": "NexusChill backend — Node.js + NestJS + MongoDB + Redis",
+  "author": "NexusChill Team",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
@@ -31,6 +31,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "cloudinary": "^2.5.1",
+    "google-auth-library": "^9.14.2",
     "helmet": "^8.0.0",
     "multer": "^1.4.5-lts.1",
     "ioredis": "^5.4.1",

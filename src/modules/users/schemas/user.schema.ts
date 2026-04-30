@@ -80,6 +80,18 @@ export class User {
   @Prop({ type: [String], enum: AuthProvider, default: [] })
   providers!: AuthProvider[];
 
+  /** Google subject id (the `sub` claim of the verified ID token). */
+  @Prop({ type: String, default: null, sparse: true, index: true })
+  googleId?: string | null;
+
+  /** Facebook user id (when we add Facebook OAuth). */
+  @Prop({ type: String, default: null, sparse: true, index: true })
+  facebookId?: string | null;
+
+  /** Apple sub id (for Sign In with Apple). */
+  @Prop({ type: String, default: null, sparse: true, index: true })
+  appleId?: string | null;
+
   @Prop({ type: String, default: '' })
   displayName!: string;
 

@@ -9,7 +9,7 @@ export class AppController {
   health() {
     return {
       status: 'ok',
-      service: 'party-app-backend',
+      service: 'nexuschill-backend',
       time: new Date().toISOString(),
     };
   }

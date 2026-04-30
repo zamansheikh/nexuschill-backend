@@ -6,7 +6,7 @@ export const configuration = () => ({
     version: process.env.API_VERSION || 'v1',
   },
   mongodb: {
-    uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/party_app',
+    uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/nexuschill',
   },
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
@@ -63,7 +63,7 @@ export const configuration = () => ({
     user: process.env.EMAIL_USER || '',
     pass: process.env.EMAIL_PASS || '',
     sendgridApiKey: process.env.SENDGRID_API_KEY,
-    from: process.env.EMAIL_FROM || 'no-reply@partyapp.com',
+    from: process.env.EMAIL_FROM || 'no-reply@nexuschill.com',
   },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
@@ -71,5 +71,20 @@ export const configuration = () => ({
     apiSecret: process.env.CLOUDINARY_API_SECRET || '',
     uploadPreset: process.env.CLOUDINARY_UPLOAD_PRESET || '',
     folder: process.env.CLOUDINARY_FOLDER || 'party-app',
+  },
+  google: {
+    /**
+     * Web client ID auto-created by Firebase when Google Sign-In is enabled.
+     * Found in google-services.json → "oauth_client" entries with `client_type: 3`.
+     * The mobile app's `GoogleSignIn(serverClientId: ...)` MUST match this so
+     * that the resulting ID token's `aud` claim is verifiable here.
+     *
+     * You can list multiple comma-separated IDs (e.g. web + iOS) — the verifier
+     * accepts any.
+     */
+    clientIds: (process.env.GOOGLE_CLIENT_IDS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
   },
 });

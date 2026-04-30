@@ -10,6 +10,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RefreshToken, RefreshTokenSchema } from './schemas/refresh-token.schema';
+import { GoogleVerifierService } from './services/google-verifier.service';
 import { OtpService } from './services/otp.service';
 import { TokenService } from './services/token.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
@@ -33,6 +34,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     AuthService,
     TokenService,
     OtpService,
+    GoogleVerifierService,
     JwtStrategy,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],

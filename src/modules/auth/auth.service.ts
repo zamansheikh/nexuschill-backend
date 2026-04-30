@@ -9,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 
 import { UserDocument, UserStatus } from '../users/schemas/user.schema';
 import { UsersService } from '../users/users.service';
+import { GoogleVerifierService } from './services/google-verifier.service';
 import { OtpService } from './services/otp.service';
 import { TokenPair, TokenService } from './services/token.service';
 
@@ -29,8 +30,51 @@ export class AuthService {
     private readonly users: UsersService,
     private readonly tokens: TokenService,
     private readonly otp: OtpService,
+    private readonly googleVerifier: GoogleVerifierService,
     private readonly config: ConfigService,
   ) {}
+
+  async loginWithGoogle(params: {
+    idToken: string;
+    context?: AuthContext;
+  }): Promise<AuthResult> {
+    const payload = await this.googleVerifier.verify(params.idToken);
+    const email = payload.email!;
+    const googleId = payload.sub;
+    const name = payload.name ?? '';
+    const picture = payload.picture ?? '';
+
+    let user = await this.users.findByGoogleIdOrEmail(googleId, email);
+    let isNewUser = false;
+
+    if (!user) {
+      user = await this.users.createWithGoogle({
+        email,
+        googleId,
+        displayName: name,
+        avatarUrl: picture,
+      });
+      isNewUser = true;
+    } else if (!user.googleId) {
+      // Existing email user signing in with Google for the first time — link.
+      await this.users.linkGoogle(user._id.toString(), googleId);
+      user = (await this.users.findById(user._id.toString()))!;
+    }
+
+    this.assertActive(user);
+
+    const tokens = await this.tokens.issueTokenPair(
+      {
+        sub: user._id.toString(),
+        email: user.email,
+        username: user.username,
+      },
+      params.context,
+    );
+
+    await this.users.markLogin(user._id.toString());
+    return { user, tokens, isNewUser };
+  }
 
   async registerEmail(params: {
     email: string;
