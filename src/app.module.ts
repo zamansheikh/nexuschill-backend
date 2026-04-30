@@ -19,6 +19,7 @@ import { CosmeticsModule } from './modules/cosmetics/cosmetics.module';
 import { DailyRewardModule } from './modules/daily-reward/daily-reward.module';
 import { GiftsModule } from './modules/gifts/gifts.module';
 import { MediaModule } from './modules/media/media.module';
+import { MomentsModule } from './modules/moments/moments.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
 import { StoreModule } from './modules/store/store.module';
 import { SvipModule } from './modules/svip/svip.module';
@@ -90,6 +91,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     BannersModule,
     DailyRewardModule,
     AgoraModule,
+    MomentsModule,
   ],
   controllers: [AppController],
   providers: [

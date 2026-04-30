@@ -102,6 +102,11 @@ export const PERMISSIONS = {
   AGORA_VIEW: 'agora.view',
   AGORA_MANAGE: 'agora.manage',
 
+  // Moments — social feed posts. View = list/inspect, moderate = remove/
+  // restore. Authors can always delete their own post via the user API.
+  MOMENTS_VIEW: 'moments.view',
+  MOMENTS_MODERATE: 'moments.moderate',
+
   // Families
   FAMILY_VIEW: 'family.view',
   FAMILY_MANAGE: 'family.manage',
@@ -165,6 +170,7 @@ export const DEFAULT_ROLES = [
       'banners.*',
       'daily_reward.*',
       'agora.*',
+      'moments.*',
       'family.*',
       'agency.*',
       'reseller.view',
