@@ -39,7 +39,7 @@ export class GiftEvent {
   totalCoinAmount!: number;
 
   @Prop({ type: Number, required: true, min: 0 })
-  totalBeanReward!: number;
+  totalDiamondReward!: number;
 
   @Prop({ type: String, enum: GiftContext, default: GiftContext.PROFILE })
   contextType!: GiftContext;

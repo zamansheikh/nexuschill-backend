@@ -113,7 +113,7 @@ export class GiftsService {
       description,
       category,
       priceCoins,
-      beanReward,
+      diamondReward,
       thumbnailUrl,
       animationUrl,
       soundUrl,
@@ -143,7 +143,7 @@ export class GiftsService {
     if (description !== undefined) gift.description = description;
     if (category !== undefined) gift.category = category;
     if (priceCoins !== undefined) gift.priceCoins = priceCoins;
-    if (beanReward !== undefined) gift.beanReward = beanReward;
+    if (diamondReward !== undefined) gift.diamondReward = diamondReward;
     if (thumbnailUrl !== undefined) gift.thumbnailUrl = thumbnailUrl;
     if (animationUrl !== undefined) gift.animationUrl = animationUrl;
     if (soundUrl !== undefined) gift.soundUrl = soundUrl;
@@ -230,14 +230,14 @@ export class GiftsService {
     // (VIP / SVIP filters land when those modules ship.)
 
     const totalCoinAmount = gift.priceCoins * input.count;
-    const totalBeanReward = gift.beanReward * input.count;
+    const totalDiamondReward = gift.diamondReward * input.count;
 
     // Atomic two-wallet transfer (uses MongoDB transaction in WalletService).
     const { senderTxn, receiverTxn } = await this.wallet.transferGift({
       senderUserId: input.senderId,
       receiverUserId: input.receiverId,
       coinAmount: totalCoinAmount,
-      beanReward: totalBeanReward,
+      diamondReward: totalDiamondReward,
       giftId: input.giftId,
       idempotencyKey: input.idempotencyKey,
       description: `Gift: ${gift.code} ×${input.count}`,
@@ -251,7 +251,7 @@ export class GiftsService {
         receiverId: new Types.ObjectId(input.receiverId),
         count: input.count,
         totalCoinAmount,
-        totalBeanReward,
+        totalDiamondReward,
         contextType: input.contextType ?? GiftContext.PROFILE,
         contextId:
           input.contextId && Types.ObjectId.isValid(input.contextId)
@@ -331,7 +331,7 @@ export class GiftsService {
           $group: {
             _id: '$giftId',
             totalCount: { $sum: '$count' },
-            totalBeans: { $sum: '$totalBeanReward' },
+            totalDiamonds: { $sum: '$totalDiamondReward' },
             lastReceived: { $max: '$createdAt' },
           },
         },
@@ -354,7 +354,7 @@ export class GiftsService {
             name: '$gift.name',
             thumbnailUrl: '$gift.thumbnailUrl',
             totalCount: 1,
-            totalBeans: 1,
+            totalDiamonds: 1,
             lastReceived: 1,
           },
         },

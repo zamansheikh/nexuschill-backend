@@ -5,7 +5,7 @@ export type TransactionDocument = HydratedDocument<Transaction>;
 
 export enum Currency {
   COINS = 'coins',
-  BEANS = 'beans',
+  DIAMONDS = 'diamonds',
 }
 
 export enum TxnDirection {

@@ -25,7 +25,7 @@ export class Wallet {
 
   /** Earning currency (received from gifts). Convertible to USD on withdrawal. */
   @Prop({ type: Number, default: 0, min: 0 })
-  beans!: number;
+  diamonds!: number;
 
   // ----- Lifetime aggregates (denormalized for fast reads) -----
 
@@ -36,10 +36,10 @@ export class Wallet {
   lifetimeCoinsSpent!: number;
 
   @Prop({ type: Number, default: 0 })
-  lifetimeBeansEarned!: number;
+  lifetimeDiamondsEarned!: number;
 
   @Prop({ type: Number, default: 0 })
-  lifetimeBeansWithdrawn!: number;
+  lifetimeDiamondsWithdrawn!: number;
 
   // ----- Admin controls -----
 

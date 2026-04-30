@@ -196,7 +196,7 @@ export class UsersService {
           params?.agencyId && Types.ObjectId.isValid(params.agencyId)
             ? new Types.ObjectId(params.agencyId)
             : null,
-        totalBeansEarned: user.hostProfile?.totalBeansEarned ?? 0,
+        totalDiamondsEarned: user.hostProfile?.totalDiamondsEarned ?? 0,
         streamHours: user.hostProfile?.streamHours ?? 0,
       } as any;
     } else {

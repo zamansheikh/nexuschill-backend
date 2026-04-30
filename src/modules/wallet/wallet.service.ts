@@ -47,7 +47,7 @@ interface GiftTransferParams {
   senderUserId: string;
   receiverUserId: string;
   coinAmount: number;
-  beanReward: number;
+  diamondReward: number;
   giftId?: string;
   idempotencyKey: string;
   description?: string;
@@ -85,14 +85,14 @@ export class WalletService {
     return this.walletModel.findOne({ userId: new Types.ObjectId(userId) }).exec();
   }
 
-  async list(params: { page?: number; limit?: number; minCoins?: number; minBeans?: number }) {
+  async list(params: { page?: number; limit?: number; minCoins?: number; minDiamonds?: number }) {
     const page = Math.max(1, params.page ?? 1);
     const limit = Math.min(100, Math.max(1, params.limit ?? 20));
     const skip = (page - 1) * limit;
 
     const filter: FilterQuery<WalletDocument> = {};
     if (params.minCoins !== undefined) filter.coins = { $gte: params.minCoins };
-    if (params.minBeans !== undefined) filter.beans = { $gte: params.minBeans };
+    if (params.minDiamonds !== undefined) filter.diamonds = { $gte: params.minDiamonds };
 
     const [items, total] = await Promise.all([
       this.walletModel.find(filter).sort({ coins: -1 }).skip(skip).limit(limit).exec(),
@@ -220,14 +220,14 @@ export class WalletService {
   // ----------- Cross-wallet transfer (gift send, etc.) -----------
 
   /**
-   * Atomically deduct coins from sender and credit beans to receiver.
+   * Atomically deduct coins from sender and credit diamonds to receiver.
    * Uses a MongoDB transaction. Idempotent on `idempotencyKey`.
    */
   async transferGift(p: GiftTransferParams): Promise<{
     senderTxn: TransactionDocument;
     receiverTxn: TransactionDocument;
   }> {
-    if (p.coinAmount <= 0 || p.beanReward < 0) {
+    if (p.coinAmount <= 0 || p.diamondReward < 0) {
       throw new BadRequestException({ code: 'INVALID_AMOUNTS', message: 'Invalid amounts' });
     }
     if (p.senderUserId === p.receiverUserId) {
@@ -265,7 +265,7 @@ export class WalletService {
         const receiverWallet = await this.walletModel.findOneAndUpdate(
           { userId: receiverObj, frozen: false },
           {
-            $inc: { beans: p.beanReward, lifetimeBeansEarned: p.beanReward },
+            $inc: { diamonds: p.diamondReward, lifetimeDiamondsEarned: p.diamondReward },
             $setOnInsert: { userId: receiverObj },
           },
           { new: true, upsert: true, session },
@@ -302,14 +302,14 @@ export class WalletService {
               correlationId: p.idempotencyKey,
               walletId: receiverWallet._id,
               userId: receiverObj,
-              currency: Currency.BEANS,
+              currency: Currency.DIAMONDS,
               direction: TxnDirection.CREDIT,
-              amount: p.beanReward,
+              amount: p.diamondReward,
               type: TxnType.GIFT_RECEIVE,
               description: p.description ?? 'Gift received',
               refType: 'gift',
               refId: p.giftId && Types.ObjectId.isValid(p.giftId) ? new Types.ObjectId(p.giftId) : null,
-              balanceAfter: receiverWallet.beans,
+              balanceAfter: receiverWallet.diamonds,
               status: TxnStatus.COMPLETED,
             },
           ],
@@ -406,11 +406,11 @@ export class WalletService {
     if (currency === Currency.COINS && direction === TxnDirection.DEBIT) {
       if (type === TxnType.GIFT_SEND) return 'lifetimeCoinsSpent';
     }
-    if (currency === Currency.BEANS && direction === TxnDirection.CREDIT) {
-      if (type === TxnType.GIFT_RECEIVE) return 'lifetimeBeansEarned';
+    if (currency === Currency.DIAMONDS && direction === TxnDirection.CREDIT) {
+      if (type === TxnType.GIFT_RECEIVE) return 'lifetimeDiamondsEarned';
     }
-    if (currency === Currency.BEANS && direction === TxnDirection.DEBIT) {
-      if (type === TxnType.WITHDRAWAL) return 'lifetimeBeansWithdrawn';
+    if (currency === Currency.DIAMONDS && direction === TxnDirection.DEBIT) {
+      if (type === TxnType.WITHDRAWAL) return 'lifetimeDiamondsWithdrawn';
     }
     return null;
   }

@@ -34,9 +34,9 @@ export class AdminWalletController {
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('minCoins') minCoins?: number,
-    @Query('minBeans') minBeans?: number,
+    @Query('minDiamonds') minDiamonds?: number,
   ) {
-    return this.wallet.list({ page, limit, minCoins, minBeans });
+    return this.wallet.list({ page, limit, minCoins, minDiamonds });
   }
 
   @RequirePermissions(PERMISSIONS.WALLET_VIEW)

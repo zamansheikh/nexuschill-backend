@@ -51,9 +51,9 @@ export class Gift {
   @Prop({ type: Number, required: true, min: 1 })
   priceCoins!: number;
 
-  /** Beans the receiver gets when this gift is sent (typically priceCoins * 0.5). */
+  /** Diamonds the receiver gets when this gift is sent (typically priceCoins * 0.5). */
   @Prop({ type: Number, required: true, min: 0 })
-  beanReward!: number;
+  diamondReward!: number;
 
   // ----- Assets -----
 

@@ -54,7 +54,7 @@ export class CreateGiftDto {
 
   @IsInt()
   @Min(0)
-  beanReward!: number;
+  diamondReward!: number;
 
   @IsOptional()
   @IsString()
@@ -145,7 +145,7 @@ export class UpdateGiftDto {
   @IsOptional()
   @IsInt()
   @Min(0)
-  beanReward?: number;
+  diamondReward?: number;
 
   @IsOptional()
   @IsString()

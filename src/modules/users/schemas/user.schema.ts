@@ -43,7 +43,7 @@ export class HostProfile {
   agencyId?: Types.ObjectId | null;
 
   @Prop({ type: Number, default: 0 })
-  totalBeansEarned!: number;
+  totalDiamondsEarned!: number;
 
   @Prop({ type: Number, default: 0 })
   streamHours!: number;

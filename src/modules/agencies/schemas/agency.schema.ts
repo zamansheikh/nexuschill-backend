@@ -54,7 +54,7 @@ export class Agency {
   hostCount!: number;
 
   @Prop({ type: Number, default: 0 })
-  totalBeansEarned!: number;
+  totalDiamondsEarned!: number;
 
   /** Linked admin user with `agency` role for this agency (optional). */
   @Prop({ type: Types.ObjectId, ref: 'AdminUser', default: null, index: true })
