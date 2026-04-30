@@ -83,6 +83,11 @@ export const PERMISSIONS = {
   VIP_VIEW: 'vip.view',
   VIP_MANAGE: 'vip.manage',
 
+  // Cosmetics catalog (frames, vehicles, themes, badges, chat bubbles, …)
+  // Used as the underlying inventory for both SVIP grants and the store.
+  COSMETICS_VIEW: 'cosmetics.view',
+  COSMETICS_MANAGE: 'cosmetics.manage',
+
   // Families
   FAMILY_VIEW: 'family.view',
   FAMILY_MANAGE: 'family.manage',
@@ -142,6 +147,7 @@ export const DEFAULT_ROLES = [
       'moderation.*',
       'store.*',
       'vip.*',
+      'cosmetics.*',
       'family.*',
       'agency.*',
       'reseller.view',

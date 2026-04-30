@@ -74,6 +74,35 @@ export class MediaService implements OnModuleInit {
     });
   }
 
+  /**
+   * Upload a non-image asset (SVGA, Lottie JSON, MP4, etc). Cloudinary's
+   * "raw" / "video" resource types accept arbitrary file payloads. SVGA is
+   * a custom binary format → use `raw`. Animated MP4/WebM → use `video`.
+   */
+  uploadAsset(
+    buffer: Buffer,
+    params: UploadParams & { resourceType: 'raw' | 'video' },
+  ): Promise<UploadApiResponse> {
+    this.assertReady();
+    const folder = `${this.rootFolder}/${params.folder}`;
+    return new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        {
+          folder,
+          public_id: params.publicId,
+          overwrite: params.overwrite ?? true,
+          resource_type: params.resourceType,
+        },
+        (err, result) => {
+          if (err) return reject(err);
+          if (!result) return reject(new Error('Cloudinary returned no result'));
+          resolve(result);
+        },
+      );
+      stream.end(buffer);
+    });
+  }
+
   async deleteImage(publicId: string): Promise<void> {
     if (!publicId) return;
     this.assertReady();
@@ -82,6 +111,17 @@ export class MediaService implements OnModuleInit {
     } catch (err) {
       // Don't fail the parent operation if cleanup fails — log only.
       this.logger.warn(`Failed to delete Cloudinary asset ${publicId}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Same as deleteImage but for non-image resource types. */
+  async deleteAsset(publicId: string, resourceType: 'raw' | 'video'): Promise<void> {
+    if (!publicId) return;
+    this.assertReady();
+    try {
+      await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+    } catch (err) {
+      this.logger.warn(`Failed to delete Cloudinary ${resourceType} ${publicId}: ${(err as Error).message}`);
     }
   }
 
