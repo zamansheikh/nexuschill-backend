@@ -54,3 +54,15 @@ export class RemoveMomentDto {
   @MaxLength(500)
   reason!: string;
 }
+
+export class CreateCommentDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  text!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  parentId?: string;
+}

@@ -19,7 +19,7 @@ import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-
 import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MediaService } from '../media/media.service';
-import { CreateMomentDto } from './dto/moment.dto';
+import { CreateCommentDto, CreateMomentDto } from './dto/moment.dto';
 import { MomentsService } from './moments.service';
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB / image
@@ -144,5 +144,44 @@ export class MomentsController {
     @Param('id') id: string,
   ) {
     return this.moments.unlike(id, current.userId);
+  }
+
+  // ---------- Comments ----------
+
+  /** Public list — anyone can read comments on a moment. */
+  @Public()
+  @Get(':id/comments')
+  async listComments(
+    @Param('id') id: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.moments.listComments(id, { page, limit });
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/comments')
+  async createComment(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: CreateCommentDto,
+  ) {
+    const comment = await this.moments.createComment({
+      momentId: id,
+      authorId: current.userId,
+      text: dto.text,
+      parentId: dto.parentId,
+    });
+    return { comment };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('comments/:commentId')
+  async deleteOwnComment(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('commentId') commentId: string,
+  ) {
+    await this.moments.deleteOwnComment(commentId, current.userId);
+    return { ok: true };
   }
 }

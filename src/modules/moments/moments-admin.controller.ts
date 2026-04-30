@@ -48,4 +48,20 @@ export class MomentsAdminController {
     const m = await this.moments.adminRestore(id);
     return { moment: m };
   }
+
+  // Comments are flat under the moment — moderators remove by comment id.
+  @RequirePermissions(PERMISSIONS.MOMENTS_MODERATE)
+  @Post('comments/:commentId/remove')
+  async removeComment(
+    @Param('commentId') commentId: string,
+    @Body() dto: RemoveMomentDto,
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ) {
+    const comment = await this.moments.adminRemoveComment(
+      commentId,
+      dto.reason,
+      admin.adminId,
+    );
+    return { comment };
+  }
 }

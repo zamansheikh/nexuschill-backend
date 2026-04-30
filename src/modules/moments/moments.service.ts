@@ -10,6 +10,11 @@ import { FilterQuery, Model, Types } from 'mongoose';
 
 import { MediaService } from '../media/media.service';
 import {
+  CommentStatus,
+  MomentComment,
+  MomentCommentDocument,
+} from './schemas/moment-comment.schema';
+import {
   MomentLike,
   MomentLikeDocument,
 } from './schemas/moment-like.schema';
@@ -33,6 +38,8 @@ export class MomentsService {
     @InjectModel(Moment.name) private readonly momentModel: Model<MomentDocument>,
     @InjectModel(MomentLike.name)
     private readonly likeModel: Model<MomentLikeDocument>,
+    @InjectModel(MomentComment.name)
+    private readonly commentModel: Model<MomentCommentDocument>,
     private readonly media: MediaService,
   ) {}
 
@@ -226,6 +233,151 @@ export class MomentsService {
     m.removedBy = null;
     await m.save();
     return m;
+  }
+
+  // ============== Comments ==============
+
+  /** Paginated comment thread for a moment. Returns active comments only,
+   * newest-first (matches the sort the mobile composer assumes). */
+  async listComments(momentId: string, params: { page?: number; limit?: number }) {
+    if (!Types.ObjectId.isValid(momentId)) {
+      throw new BadRequestException({
+        code: 'INVALID_MOMENT_ID',
+        message: 'Invalid moment id',
+      });
+    }
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(100, Math.max(1, params.limit ?? 30));
+    const skip = (page - 1) * limit;
+
+    const filter: FilterQuery<MomentCommentDocument> = {
+      momentId: new Types.ObjectId(momentId),
+      status: CommentStatus.ACTIVE,
+    };
+    const [items, total] = await Promise.all([
+      this.commentModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('authorId', 'username displayName avatarUrl numericId level isHost')
+        .exec(),
+      this.commentModel.countDocuments(filter).exec(),
+    ]);
+    return { items, page, limit, total };
+  }
+
+  async createComment(params: {
+    momentId: string;
+    authorId: string;
+    text: string;
+    parentId?: string;
+  }): Promise<MomentCommentDocument> {
+    if (
+      !Types.ObjectId.isValid(params.momentId) ||
+      !Types.ObjectId.isValid(params.authorId)
+    ) {
+      throw new BadRequestException({ code: 'INVALID_ID', message: 'Invalid id' });
+    }
+    const text = params.text.trim();
+    if (text.length === 0) {
+      throw new BadRequestException({
+        code: 'EMPTY_COMMENT',
+        message: 'Comment cannot be empty',
+      });
+    }
+    const moment = await this.getByIdOrThrow(params.momentId);
+    if (moment.status !== MomentStatus.ACTIVE) {
+      throw new BadRequestException({
+        code: 'MOMENT_INACTIVE',
+        message: 'Cannot comment on an inactive moment',
+      });
+    }
+
+    let parentId: Types.ObjectId | null = null;
+    if (params.parentId) {
+      if (!Types.ObjectId.isValid(params.parentId)) {
+        throw new BadRequestException({
+          code: 'INVALID_PARENT_ID',
+          message: 'Invalid reply target',
+        });
+      }
+      const parent = await this.commentModel.findById(params.parentId).exec();
+      if (!parent || parent.momentId.toString() !== params.momentId) {
+        throw new NotFoundException('Reply target not found');
+      }
+      parentId = parent._id;
+    }
+
+    const created = await this.commentModel.create({
+      momentId: new Types.ObjectId(params.momentId),
+      authorId: new Types.ObjectId(params.authorId),
+      text,
+      parentId,
+      status: CommentStatus.ACTIVE,
+    });
+
+    // Bump the denormalized counter on the parent moment so feed cards
+    // show the right number without a second query.
+    await this.momentModel
+      .updateOne({ _id: moment._id }, { $inc: { commentCount: 1 } })
+      .exec();
+
+    // Re-fetch with author populated so the mobile sheet can render the
+    // new comment immediately without a roundtrip to refresh the list.
+    return (await this.commentModel
+      .findById(created._id)
+      .populate('authorId', 'username displayName avatarUrl numericId level isHost')
+      .exec())!;
+  }
+
+  async deleteOwnComment(commentId: string, userId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(commentId)) {
+      throw new NotFoundException('Comment not found');
+    }
+    const c = await this.commentModel.findById(commentId).exec();
+    if (!c || c.status === CommentStatus.DELETED) {
+      throw new NotFoundException('Comment not found');
+    }
+    if (c.authorId.toString() !== userId) {
+      throw new ForbiddenException({
+        code: 'NOT_AUTHOR',
+        message: 'You can only delete your own comments',
+      });
+    }
+    c.status = CommentStatus.DELETED;
+    await c.save();
+    await this.momentModel
+      .updateOne(
+        { _id: c.momentId, commentCount: { $gt: 0 } },
+        { $inc: { commentCount: -1 } },
+      )
+      .exec();
+  }
+
+  async adminRemoveComment(
+    commentId: string,
+    reason: string,
+    adminId?: string,
+  ): Promise<MomentCommentDocument> {
+    const c = await this.commentModel.findById(commentId).exec();
+    if (!c) throw new NotFoundException('Comment not found');
+    const wasActive = c.status === CommentStatus.ACTIVE;
+    c.status = CommentStatus.REMOVED;
+    c.removedReason = reason;
+    if (adminId && Types.ObjectId.isValid(adminId)) {
+      c.removedBy = new Types.ObjectId(adminId);
+    }
+    await c.save();
+    if (wasActive) {
+      await this.momentModel
+        .updateOne(
+          { _id: c.momentId, commentCount: { $gt: 0 } },
+          { $inc: { commentCount: -1 } },
+        )
+        .exec();
+    }
+    return c;
   }
 
   // ============== helpers ==============
