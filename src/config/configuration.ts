@@ -73,18 +73,26 @@ export const configuration = () => ({
     folder: process.env.CLOUDINARY_FOLDER || 'party-app',
   },
   google: {
-    /**
-     * Web client ID auto-created by Firebase when Google Sign-In is enabled.
-     * Found in google-services.json → "oauth_client" entries with `client_type: 3`.
-     * The mobile app's `GoogleSignIn(serverClientId: ...)` MUST match this so
-     * that the resulting ID token's `aud` claim is verifiable here.
-     *
-     * You can list multiple comma-separated IDs (e.g. web + iOS) — the verifier
-     * accepts any.
-     */
+    /** Optional: legacy raw-Google ID token verifier audience list. */
     clientIds: (process.env.GOOGLE_CLIENT_IDS || '')
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean),
+  },
+  firebase: {
+    /**
+     * Firebase project ID — required to verify Firebase ID tokens.
+     * Found in google-services.json → project_info.project_id.
+     * The mobile app sends a Firebase-issued ID token; this is what the
+     * verifier checks the `aud` claim against.
+     */
+    projectId: process.env.FIREBASE_PROJECT_ID || '',
+    /**
+     * Optional service account JSON path (used in production for full Admin
+     * SDK access). Not required just for token verification — the SDK can
+     * use Application Default Credentials or fetch Google's public keys
+     * unauthenticated when only the project ID is set.
+     */
+    serviceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || '',
   },
 });

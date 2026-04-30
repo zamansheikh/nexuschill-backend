@@ -9,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 
 import { UserDocument, UserStatus } from '../users/schemas/user.schema';
 import { UsersService } from '../users/users.service';
+import { FirebaseVerifierService } from './services/firebase-verifier.service';
 import { GoogleVerifierService } from './services/google-verifier.service';
 import { OtpService } from './services/otp.service';
 import { TokenPair, TokenService } from './services/token.service';
@@ -31,33 +32,54 @@ export class AuthService {
     private readonly tokens: TokenService,
     private readonly otp: OtpService,
     private readonly googleVerifier: GoogleVerifierService,
+    private readonly firebaseVerifier: FirebaseVerifierService,
     private readonly config: ConfigService,
   ) {}
 
+  /**
+   * Sign in with a Google account.
+   *
+   * The mobile app uses Firebase Auth + GoogleSignIn — so the token we receive
+   * here is a *Firebase* ID token (not a raw Google ID token). We try Firebase
+   * verification first; if Firebase isn't configured, we fall back to
+   * verifying the token as a raw Google ID token (legacy path).
+   */
   async loginWithGoogle(params: {
     idToken: string;
     context?: AuthContext;
   }): Promise<AuthResult> {
-    const payload = await this.googleVerifier.verify(params.idToken);
-    const email = payload.email!;
-    const googleId = payload.sub;
-    const name = payload.name ?? '';
-    const picture = payload.picture ?? '';
+    let email: string;
+    let externalId: string;
+    let name = '';
+    let picture = '';
 
-    let user = await this.users.findByGoogleIdOrEmail(googleId, email);
+    if (this.firebaseVerifier.isReady()) {
+      const decoded = await this.firebaseVerifier.verify(params.idToken);
+      email = decoded.email!;
+      externalId = decoded.uid;
+      name = (decoded.name as string | undefined) ?? '';
+      picture = (decoded.picture as string | undefined) ?? '';
+    } else {
+      const payload = await this.googleVerifier.verify(params.idToken);
+      email = payload.email!;
+      externalId = payload.sub;
+      name = payload.name ?? '';
+      picture = payload.picture ?? '';
+    }
+
+    let user = await this.users.findByGoogleIdOrEmail(externalId, email);
     let isNewUser = false;
 
     if (!user) {
       user = await this.users.createWithGoogle({
         email,
-        googleId,
+        googleId: externalId,
         displayName: name,
         avatarUrl: picture,
       });
       isNewUser = true;
     } else if (!user.googleId) {
-      // Existing email user signing in with Google for the first time — link.
-      await this.users.linkGoogle(user._id.toString(), googleId);
+      await this.users.linkGoogle(user._id.toString(), externalId);
       user = (await this.users.findById(user._id.toString()))!;
     }
 
