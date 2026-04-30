@@ -44,9 +44,21 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message = resp;
       } else if (typeof resp === 'object' && resp !== null) {
         const r = resp as Record<string, unknown>;
-        message = (r.message as string) || message;
+        const rawMessage = r.message;
+        // class-validator's BadRequestException stuffs an array of
+        // per-field error strings into `message`. Collapse to a readable
+        // single-line summary; keep the original list under `details`
+        // so the client can show field-by-field UI if it wants.
+        if (Array.isArray(rawMessage)) {
+          message = rawMessage.length > 0
+            ? rawMessage.map((m) => String(m)).join('; ')
+            : message;
+          if (details === undefined) details = rawMessage;
+        } else if (typeof rawMessage === 'string') {
+          message = rawMessage;
+        }
         code = (r.code as string) || this.statusToCode(status);
-        details = r.details;
+        if (r.details !== undefined) details = r.details;
       }
     } else if (exception instanceof Error) {
       message = exception.message;

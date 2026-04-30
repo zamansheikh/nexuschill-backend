@@ -3,6 +3,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 
@@ -22,6 +23,22 @@ export class CosmeticsController {
   @Get()
   async myCosmetics(@CurrentUser() current: AuthenticatedUser) {
     const items = await this.cosmetics.listUserCosmetics(current.userId);
+    return { items };
+  }
+
+  /**
+   * Bulk fetch the equipped cosmetics for a list of users. Used by the
+   * audio-room view to hydrate every visible seat / chat author in one
+   * round-trip. `userIds` is comma-separated.
+   */
+  @Get('equipped/bulk')
+  async bulkEquipped(@Query('userIds') userIds?: string) {
+    const ids = (userIds ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (ids.length === 0) return { items: [] };
+    const items = await this.cosmetics.listEquippedForUsers(ids);
     return { items };
   }
 

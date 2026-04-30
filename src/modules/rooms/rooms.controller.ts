@@ -23,6 +23,7 @@ import {
   CreateRoomDto,
   EnterRoomDto,
   KickFromRoomDto,
+  SendChatDto,
   UpdateRoomSettingsDto,
 } from './dto/room.dto';
 import { RoomKind } from './schemas/room.schema';
@@ -249,5 +250,31 @@ export class RoomsController {
     @Param('id') id: string,
   ) {
     return this.rooms.listKickHistory(id, current.userId);
+  }
+
+  // ---------- Chat ----------
+
+  /** Recent chat messages (newest-first). Anyone can read; auth required
+   *  to keep public scrape-bots out of room chat. */
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/chat')
+  async listChat(
+    @Param('id') id: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.rooms.listChat(id, { page, limit });
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/chat')
+  async sendChat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: SendChatDto,
+  ) {
+    const message = await this.rooms.sendChat(id, current.userId, dto.text);
+    return { message };
   }
 }

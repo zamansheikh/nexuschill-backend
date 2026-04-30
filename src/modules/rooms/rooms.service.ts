@@ -20,6 +20,11 @@ import { RealtimeEventType } from '../realtime/realtime.types';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CreateRoomDto, UpdateRoomSettingsDto } from './dto/room.dto';
 import {
+  RoomChatMessage,
+  RoomChatMessageDocument,
+  RoomChatStatus,
+} from './schemas/room-chat-message.schema';
+import {
   RoomMember,
   RoomMemberDocument,
   RoomRole,
@@ -57,6 +62,8 @@ export class RoomsService {
     private readonly seatModel: Model<RoomSeatDocument>,
     @InjectModel(RoomMember.name)
     private readonly memberModel: Model<RoomMemberDocument>,
+    @InjectModel(RoomChatMessage.name)
+    private readonly chatModel: Model<RoomChatMessageDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly numericIds: NumericIdService,
     private readonly agora: AgoraService,
@@ -911,6 +918,107 @@ export class RoomsService {
       code: 'NOT_AUTHORIZED',
       message: 'Owner or admin only',
     });
+  }
+
+  // ============== Chat ==============
+
+  /**
+   * Recent chat messages for a room, newest-first. Used to hydrate the
+   * scrollback when a viewer enters the room — live messages from then on
+   * arrive via the realtime layer.
+   */
+  async listChat(
+    roomId: string,
+    params: { page?: number; limit?: number } = {},
+  ) {
+    const room = await this.getOrThrow(roomId);
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(100, Math.max(1, params.limit ?? 30));
+    const skip = (page - 1) * limit;
+    const filter = {
+      roomId: room._id,
+      status: RoomChatStatus.ACTIVE,
+    };
+    const [items, total] = await Promise.all([
+      this.chatModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('authorId', 'username displayName avatarUrl numericId level isHost')
+        .exec(),
+      this.chatModel.countDocuments(filter).exec(),
+    ]);
+    return { items: items.map((m) => m.toJSON()), page, limit, total };
+  }
+
+  /**
+   * Post a chat message. Enforces the room's chat policy: when set to
+   * `admins`, only the owner + admins can speak; everyone else gets a 403.
+   * Blocked users always get a 403.
+   *
+   * On success the saved message is broadcast over the realtime layer so
+   * everyone in the room sees it without polling.
+   */
+  async sendChat(
+    roomId: string,
+    authorId: string,
+    text: string,
+  ) {
+    if (!Types.ObjectId.isValid(authorId)) {
+      throw new BadRequestException({ code: 'INVALID_USER_ID', message: 'Invalid user' });
+    }
+    const trimmed = (text ?? '').trim();
+    if (trimmed.length === 0) {
+      throw new BadRequestException({
+        code: 'EMPTY_MESSAGE',
+        message: 'Message cannot be empty',
+      });
+    }
+    const room = await this.getOrThrow(roomId);
+    if (room.status !== RoomStatus.ACTIVE) {
+      throw new ForbiddenException({
+        code: 'ROOM_INACTIVE',
+        message: 'Room is closed',
+      });
+    }
+    const userOid = new Types.ObjectId(authorId);
+    if (room.blockedUserIds.some((b) => b.equals(userOid))) {
+      throw new ForbiddenException({
+        code: 'BLOCKED',
+        message: 'You are blocked from this room',
+      });
+    }
+
+    const isPrivileged =
+      room.ownerId.equals(userOid) ||
+      room.adminUserIds.some((a) => a.equals(userOid));
+    if (!isPrivileged && room.policies.chat === 'admins') {
+      throw new ForbiddenException({
+        code: 'CHAT_LOCKED_TO_ADMINS',
+        message: 'Only admins can chat in this room',
+      });
+    }
+
+    const created = await this.chatModel.create({
+      roomId: room._id,
+      authorId: userOid,
+      text: trimmed,
+      status: RoomChatStatus.ACTIVE,
+    });
+    const populated = await this.chatModel
+      .findById(created._id)
+      .populate('authorId', 'username displayName avatarUrl numericId level isHost')
+      .exec();
+    const json = populated!.toJSON();
+
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.ROOM_CHAT_MESSAGE,
+      { message: json },
+    );
+
+    return json;
   }
 
   // ============== Admin moderation ==============

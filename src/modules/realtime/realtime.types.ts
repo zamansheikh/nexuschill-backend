@@ -27,6 +27,10 @@ export enum RealtimeEventType {
   ROOM_MEMBER_JOINED = 'room.member.joined',
   ROOM_MEMBER_LEFT = 'room.member.left',
 
+  /** Chat message posted in this room. Payload is the persisted message
+   *  with author hydrated. */
+  ROOM_CHAT_MESSAGE = 'room.chat.message',
+
   /** Gift sent in this room — drives the SVGA overlay + banner. */
   ROOM_GIFT_SENT = 'room.gift.sent',
 

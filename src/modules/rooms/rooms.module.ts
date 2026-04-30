@@ -6,6 +6,10 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { RoomsAdminController } from './rooms-admin.controller';
 import { RoomsController } from './rooms.controller';
 import { RoomsService } from './rooms.service';
+import {
+  RoomChatMessage,
+  RoomChatMessageSchema,
+} from './schemas/room-chat-message.schema';
 import { RoomMember, RoomMemberSchema } from './schemas/room-member.schema';
 import { RoomSeat, RoomSeatSchema } from './schemas/room-seat.schema';
 import { Room, RoomSchema } from './schemas/room.schema';
@@ -16,6 +20,7 @@ import { Room, RoomSchema } from './schemas/room.schema';
       { name: Room.name, schema: RoomSchema },
       { name: RoomSeat.name, schema: RoomSeatSchema },
       { name: RoomMember.name, schema: RoomMemberSchema },
+      { name: RoomChatMessage.name, schema: RoomChatMessageSchema },
       // Read-only access to User for hydrating snapshots / blocked lists.
       // The full Users module isn't imported to avoid a circular dep.
       { name: User.name, schema: UserSchema },

@@ -232,6 +232,30 @@ export class CosmeticsService {
   }
 
   /**
+   * Equipped cosmetics for a batch of users — used by the audio-room view
+   * to hydrate avatar frames, mic skins, and chat bubbles in one round
+   * trip. Returns rows keyed by userId so the client can group them
+   * locally.
+   *
+   * Skips expired rows. Only `equipped: true` is returned.
+   */
+  async listEquippedForUsers(userIds: string[]): Promise<UserCosmeticDocument[]> {
+    const oids = userIds
+      .filter((id) => Types.ObjectId.isValid(id))
+      .map((id) => new Types.ObjectId(id));
+    if (oids.length === 0) return [];
+    const now = new Date();
+    return this.userCosmeticModel
+      .find({
+        userId: { $in: oids },
+        equipped: true,
+        $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+      })
+      .populate('cosmeticItemId')
+      .exec();
+  }
+
+  /**
    * Mark one item as equipped for a user, unequipping any other of the same
    * `type` so the user has at most one active item per slot.
    */

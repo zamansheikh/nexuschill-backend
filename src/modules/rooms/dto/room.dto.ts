@@ -16,10 +16,13 @@ import { Type } from 'class-transformer';
 import { ChatPolicy, MicPolicy, RoomKind } from '../schemas/room.schema';
 
 export class CreateRoomDto {
+  /// Optional. When omitted, the service falls back to the user's
+  /// displayName / username so first-time creators get a sensible default.
+  @IsOptional()
   @IsString()
   @MinLength(2)
   @MaxLength(60)
-  name!: string;
+  name?: string;
 
   @IsOptional()
   @IsString()
@@ -111,4 +114,11 @@ export class RemoveRoomDto {
   @IsNotEmpty()
   @MaxLength(500)
   reason!: string;
+}
+
+export class SendChatDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(300)
+  text!: string;
 }
