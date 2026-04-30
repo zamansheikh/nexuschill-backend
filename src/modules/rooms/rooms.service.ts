@@ -467,9 +467,18 @@ export class RoomsService {
           .exec(),
         this.cosmetics.listEquippedForUsers([userId]),
       ]);
+      // `equipped` is the plain JSON shape (cache-friendly) returned
+      // by CosmeticsService.listEquippedForUsers. Each row's
+      // `cosmeticItemId` is the inline CosmeticItem JSON, so we look
+      // for the vehicle there directly.
       const vehicle = equipped
-        .map((row) => row.cosmeticItemId as any)
-        .find((item) => item && item.type === 'vehicle');
+        .map((row) => row.cosmeticItemId)
+        .find(
+          (item): item is Record<string, unknown> =>
+            !!item &&
+            typeof item === 'object' &&
+            (item as Record<string, unknown>).type === 'vehicle',
+        );
       void this.realtime.emitToRoom(
         room._id.toString(),
         RealtimeEventType.ROOM_MEMBER_JOINED,
@@ -480,7 +489,7 @@ export class RoomsService {
           // Null when the joiner doesn't own/equip a vehicle. The
           // cosmetic is fully populated (preview + animation URLs +
           // assetType) so the mobile overlay plays directly.
-          vehicle: vehicle ? vehicle.toJSON() : null,
+          vehicle: vehicle ?? null,
         },
       );
     }

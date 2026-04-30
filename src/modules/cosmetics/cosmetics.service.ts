@@ -7,6 +7,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 
 import { MediaService } from '../media/media.service';
+import { RedisService } from '../../redis/redis.service';
 import {
   CosmeticAssetType,
   CosmeticItem,
@@ -18,6 +19,15 @@ import {
   UserCosmetic,
   UserCosmeticDocument,
 } from './schemas/user-cosmetic.schema';
+
+/// Per-user equipped-cosmetics cache. Reads happen on every room
+/// snapshot fetch + every `room.member.joined` (vehicle lookup), and
+/// the underlying query joins UserCosmetic ⨝ CosmeticItem with a
+/// `populate`. Caching by userId in Redis cuts that to a single
+/// Redis GET per user once warm; the TTL plus explicit invalidation
+/// on `equip()` / `grantToUser()` keeps stale data within bounds.
+const EQUIPPED_CACHE_TTL_SECONDS = 30;
+const EQUIPPED_CACHE_KEY = (userId: string) => `cosmetics:equipped:${userId}`;
 
 interface ListItemsParams {
   page?: number;
@@ -35,6 +45,7 @@ export class CosmeticsService {
     @InjectModel(UserCosmetic.name)
     private readonly userCosmeticModel: Model<UserCosmeticDocument>,
     private readonly media: MediaService,
+    private readonly redis: RedisService,
   ) {}
 
   // ============== Catalog (admin-side CRUD) ==============
@@ -203,10 +214,13 @@ export class CosmeticsService {
         existing.expiresAt = null;
         await existing.save();
       }
+      // Expiry change can flip a previously-expired item back to
+      // valid for the equipped query, so bust the cache either way.
+      await this._bustEquippedCache(params.userId);
       return existing;
     }
 
-    return this.userCosmeticModel.create({
+    const created = await this.userCosmeticModel.create({
       userId: userObj,
       cosmeticItemId: itemObj,
       source: params.source,
@@ -219,6 +233,12 @@ export class CosmeticsService {
           : null,
       svipTier: params.svipTier ?? null,
     });
+    // New rows are created with `equipped: false` by the schema default,
+    // so this doesn't change the equipped set immediately. Still bust
+    // the cache to keep the stored entry honest in case the caller
+    // proceeds to equip the new item right away.
+    await this._bustEquippedCache(params.userId);
+    return created;
   }
 
   /** All cosmetics owned by a user, including expired (caller can filter). */
@@ -232,27 +252,88 @@ export class CosmeticsService {
   }
 
   /**
-   * Equipped cosmetics for a batch of users — used by the audio-room view
-   * to hydrate avatar frames, mic skins, and chat bubbles in one round
-   * trip. Returns rows keyed by userId so the client can group them
-   * locally.
+   * Equipped cosmetics for a batch of users. Returns plain JSON objects
+   * (the toJSON form of UserCosmetic with `cosmeticItemId` populated as
+   * an inline CosmeticItem JSON) — same shape that hits the wire when
+   * the controller forwards the result. Plain JSON makes the Redis
+   * cache trivially round-trippable.
+   *
+   * Cache strategy: per-user 30s TTL keyed by userId. Cache is busted
+   * explicitly in `equip()` and `grantToUser()` so the user sees their
+   * own changes immediately on the next read.
    *
    * Skips expired rows. Only `equipped: true` is returned.
    */
-  async listEquippedForUsers(userIds: string[]): Promise<UserCosmeticDocument[]> {
-    const oids = userIds
-      .filter((id) => Types.ObjectId.isValid(id))
-      .map((id) => new Types.ObjectId(id));
-    if (oids.length === 0) return [];
+  async listEquippedForUsers(
+    userIds: string[],
+  ): Promise<Array<Record<string, unknown>>> {
+    const valid = userIds.filter((id) => Types.ObjectId.isValid(id));
+    if (valid.length === 0) return [];
+
+    // Try the Redis cache for every userId in parallel. Hits are
+    // arrays of equipped JSON; misses are the userIds we still need to
+    // hit Mongo for.
+    const cacheKeys = valid.map(EQUIPPED_CACHE_KEY);
+    const cached = await Promise.all(cacheKeys.map((k) => this.redis.get(k)));
+
+    const out: Array<Record<string, unknown>> = [];
+    const misses: string[] = [];
+    cached.forEach((c, i) => {
+      if (c == null) {
+        misses.push(valid[i]);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(c) as Array<Record<string, unknown>>;
+        if (Array.isArray(parsed)) out.push(...parsed);
+      } catch {
+        // Corrupt entry — treat as miss; the fresh fetch will overwrite it.
+        misses.push(valid[i]);
+      }
+    });
+
+    if (misses.length === 0) return out;
+
+    // One DB round-trip for everyone we couldn't cache-hit.
     const now = new Date();
-    return this.userCosmeticModel
+    const fresh = await this.userCosmeticModel
       .find({
-        userId: { $in: oids },
+        userId: { $in: misses.map((id) => new Types.ObjectId(id)) },
         equipped: true,
         $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
       })
       .populate('cosmeticItemId')
       .exec();
+
+    // Group by userId so we can write one cache entry per user — even
+    // for users with no equipped items (cache the empty list, otherwise
+    // every join for a fresh account would re-query the DB).
+    const byUser = new Map<string, Array<Record<string, unknown>>>();
+    for (const id of misses) byUser.set(id, []);
+    for (const row of fresh) {
+      const id = row.userId.toString();
+      const json = row.toJSON() as Record<string, unknown>;
+      byUser.get(id)?.push(json);
+      out.push(json);
+    }
+
+    // Fire-and-forget cache writes — failures here are fine; next read
+    // will just hit Mongo again.
+    for (const [id, items] of byUser) {
+      this.redis
+        .set(EQUIPPED_CACHE_KEY(id), JSON.stringify(items), EQUIPPED_CACHE_TTL_SECONDS)
+        .catch(() => undefined);
+    }
+
+    return out;
+  }
+
+  /// Drop the cached equipped list for a single user. Called from any
+  /// path that mutates equipped state (equip / grant / etc.) so the
+  /// next read pulls fresh from Mongo.
+  private async _bustEquippedCache(userId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(userId)) return;
+    await this.redis.del(EQUIPPED_CACHE_KEY(userId)).catch(() => undefined);
   }
 
   /**
@@ -288,6 +369,11 @@ export class CosmeticsService {
 
     owned.equipped = true;
     await owned.save();
+    // The user's equipped set just changed (one item flipped on, peers
+    // of the same type flipped off). Drop their cache so the next read
+    // — usually the same client refreshing inventory + the room view —
+    // pulls the fresh state instead of the up-to-30s-stale entry.
+    await this._bustEquippedCache(userId);
     return owned;
   }
 }
