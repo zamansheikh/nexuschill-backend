@@ -15,6 +15,8 @@ import { AgoraService } from '../agora/agora.service';
 import { RtcRoleDto } from '../agora/dto/agora.dto';
 import { NumericIdService } from '../common/numeric-id.service';
 import { CounterScope } from '../common/schemas/counter.schema';
+import { RealtimeService } from '../realtime/realtime.service';
+import { RealtimeEventType } from '../realtime/realtime.types';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CreateRoomDto, UpdateRoomSettingsDto } from './dto/room.dto';
 import {
@@ -58,6 +60,7 @@ export class RoomsService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly numericIds: NumericIdService,
     private readonly agora: AgoraService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   // ============== Lifecycle ==============
@@ -241,6 +244,13 @@ export class RoomsService {
       }
     }
     await room.save();
+    // Push the new settings to everyone currently in the room so their UI
+    // updates without a refetch.
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.ROOM_SETTINGS_UPDATED,
+      { room: room.toJSON() },
+    );
     return room;
   }
 
@@ -341,6 +351,7 @@ export class RoomsService {
     const existing = await this.memberModel
       .findOne({ roomId: room._id, userId: userOid })
       .exec();
+    let firstTimeJoin = false;
     if (existing) {
       existing.lastSeenAt = new Date();
       existing.role = role;
@@ -359,6 +370,26 @@ export class RoomsService {
           { $inc: { viewerCount: 1 }, $set: { liveAt: new Date() } },
         )
         .exec();
+      firstTimeJoin = true;
+    }
+
+    // Notify everyone already in the room that someone joined. We hydrate
+    // the user fields the UI needs (avatar, name, level, frame cosmetic);
+    // viewerCount is included so the header counter updates in lockstep.
+    if (firstTimeJoin) {
+      const joiner = await this.userModel
+        .findById(userOid)
+        .select('username displayName avatarUrl numericId level isHost')
+        .exec();
+      void this.realtime.emitToRoom(
+        room._id.toString(),
+        RealtimeEventType.ROOM_MEMBER_JOINED,
+        {
+          user: joiner?.toJSON() ?? null,
+          role,
+          viewerCount: room.viewerCount + 1,
+        },
+      );
     }
 
     // Mint a subscriber token by default — sufficient to listen. Taking a
@@ -384,6 +415,7 @@ export class RoomsService {
     const removed = await this.memberModel
       .deleteOne({ roomId: room._id, userId: userOid })
       .exec();
+    let newViewerCount = room.viewerCount;
     if (removed.deletedCount === 1) {
       await this.roomModel
         .updateOne(
@@ -391,15 +423,40 @@ export class RoomsService {
           { $inc: { viewerCount: -1 } },
         )
         .exec();
+      newViewerCount = Math.max(0, newViewerCount - 1);
     }
 
     // If the user held a seat, vacate it.
-    await this.seatModel
-      .updateMany(
-        { roomId: room._id, userId: userOid },
-        { $set: { userId: null, joinedAt: null, muted: false } },
-      )
+    const vacated = await this.seatModel
+      .find({ roomId: room._id, userId: userOid })
       .exec();
+    if (vacated.length > 0) {
+      await this.seatModel
+        .updateMany(
+          { roomId: room._id, userId: userOid },
+          { $set: { userId: null, joinedAt: null, muted: false } },
+        )
+        .exec();
+      // Emit a SEAT_UPDATED for each freed seat so the grid empties live.
+      for (const seat of vacated) {
+        const fresh = await this.seatModel.findById(seat._id).exec();
+        if (fresh) {
+          void this.realtime.emitToRoom(
+            room._id.toString(),
+            RealtimeEventType.SEAT_UPDATED,
+            { seat: fresh.toJSON() },
+          );
+        }
+      }
+    }
+
+    if (removed.deletedCount === 1) {
+      void this.realtime.emitToRoom(
+        room._id.toString(),
+        RealtimeEventType.ROOM_MEMBER_LEFT,
+        { userId: userId, viewerCount: newViewerCount },
+      );
+    }
 
     return { ok: true };
   }
@@ -468,17 +525,48 @@ export class RoomsService {
     }
 
     // Vacate any other seat the user might be holding (shouldn't normally
-    // happen, but guards against ghosts after a crashed leave).
-    await this.seatModel
-      .updateMany(
-        {
-          roomId: room._id,
-          userId: userOid,
-          seatIndex: { $ne: seatIndex },
-        },
-        { $set: { userId: null, joinedAt: null, muted: false } },
-      )
+    // happen, but guards against ghosts after a crashed leave). Track which
+    // ones changed so we can emit SEAT_UPDATED for each one.
+    const ghosts = await this.seatModel
+      .find({
+        roomId: room._id,
+        userId: userOid,
+        seatIndex: { $ne: seatIndex },
+      })
       .exec();
+    if (ghosts.length > 0) {
+      await this.seatModel
+        .updateMany(
+          {
+            roomId: room._id,
+            userId: userOid,
+            seatIndex: { $ne: seatIndex },
+          },
+          { $set: { userId: null, joinedAt: null, muted: false } },
+        )
+        .exec();
+      for (const g of ghosts) {
+        const fresh = await this.seatModel.findById(g._id).exec();
+        if (fresh) {
+          void this.realtime.emitToRoom(
+            room._id.toString(),
+            RealtimeEventType.SEAT_UPDATED,
+            { seat: fresh.toJSON() },
+          );
+        }
+      }
+    }
+
+    // Hydrate the seat with the new occupant for the broadcast.
+    const claimWithUser = await this.seatModel
+      .findById(claim._id)
+      .populate('userId', 'username displayName avatarUrl numericId level isHost')
+      .exec();
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.SEAT_UPDATED,
+      { seat: (claimWithUser ?? claim).toJSON() },
+    );
 
     // Publisher RTC token so the client can start sending audio.
     const token = await this.agora.generateRtcToken({
@@ -486,7 +574,7 @@ export class RoomsService {
       uid: this.uidForUser(userOid),
       role: RtcRoleDto.PUBLISHER,
     });
-    return { seat: claim.toJSON(), rtc: token };
+    return { seat: (claimWithUser ?? claim).toJSON(), rtc: token };
   }
 
   async leaveSeat(roomId: string, userId: string, seatIndex: number) {
@@ -505,6 +593,11 @@ export class RoomsService {
         message: 'You are not on this seat',
       });
     }
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.SEAT_UPDATED,
+      { seat: res.toJSON() },
+    );
     // Remint subscriber token so the client drops publishing.
     const token = await this.agora.generateRtcToken({
       channelName: channelNameFor(room),
@@ -534,10 +627,16 @@ export class RoomsService {
         { $set: { locked } },
         { new: true },
       )
+      .populate('userId', 'username displayName avatarUrl numericId level isHost')
       .exec();
     if (!seat) {
       throw new NotFoundException({ code: 'SEAT_NOT_FOUND', message: 'Seat not found' });
     }
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.SEAT_UPDATED,
+      { seat: seat.toJSON() },
+    );
     return { seat: seat.toJSON() };
   }
 
@@ -556,10 +655,16 @@ export class RoomsService {
         { $set: { muted } },
         { new: true },
       )
+      .populate('userId', 'username displayName avatarUrl numericId level isHost')
       .exec();
     if (!seat) {
       throw new NotFoundException({ code: 'SEAT_NOT_FOUND', message: 'Seat not found' });
     }
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.SEAT_UPDATED,
+      { seat: seat.toJSON() },
+    );
     return { seat: seat.toJSON() };
   }
 
@@ -585,6 +690,11 @@ export class RoomsService {
         message: 'Seat is already empty',
       });
     }
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.SEAT_UPDATED,
+      { seat: seat.toJSON() },
+    );
     return { seat: seat.toJSON() };
   }
 
@@ -664,7 +774,12 @@ export class RoomsService {
     });
     await room.save();
 
-    // Drop their presence + seats.
+    // Drop their presence + seats. Capture the seats they were holding so
+    // we can emit SEAT_UPDATED for each one — otherwise the grid would
+    // still show them sitting there until everyone refetches.
+    const heldSeats = await this.seatModel
+      .find({ roomId: room._id, userId: targetOid })
+      .exec();
     await Promise.all([
       this.memberModel.deleteOne({ roomId: room._id, userId: targetOid }).exec(),
       this.seatModel
@@ -680,6 +795,29 @@ export class RoomsService {
         )
         .exec(),
     ]);
+
+    // Tell every viewer in the room that this user got blocked. The target
+    // listens for this event and disconnects locally on receipt; everyone
+    // else just removes them from the member list.
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.ROOM_USER_BLOCKED,
+      {
+        userId: targetUserId,
+        byUserId: actorId,
+        reason: reason ?? '',
+      },
+    );
+    for (const seat of heldSeats) {
+      const fresh = await this.seatModel.findById(seat._id).exec();
+      if (fresh) {
+        void this.realtime.emitToRoom(
+          room._id.toString(),
+          RealtimeEventType.SEAT_UPDATED,
+          { seat: fresh.toJSON() },
+        );
+      }
+    }
     return { ok: true };
   }
 

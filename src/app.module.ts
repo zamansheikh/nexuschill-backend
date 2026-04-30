@@ -20,6 +20,7 @@ import { DailyRewardModule } from './modules/daily-reward/daily-reward.module';
 import { GiftsModule } from './modules/gifts/gifts.module';
 import { MediaModule } from './modules/media/media.module';
 import { MomentsModule } from './modules/moments/moments.module';
+import { RealtimeModule } from './modules/realtime/realtime.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
 import { StoreModule } from './modules/store/store.module';
@@ -93,6 +94,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     DailyRewardModule,
     AgoraModule,
     MomentsModule,
+    RealtimeModule,
     RoomsModule,
   ],
   controllers: [AppController],
