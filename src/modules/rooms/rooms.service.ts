@@ -203,6 +203,55 @@ export class RoomsService {
     };
   }
 
+  // ============== Discovery (public list) ==============
+
+  /**
+   * Live rooms — the Popular / Recent grid on the Live tab. We treat a
+   * room as "live" when it's ACTIVE and currently has viewers. Sorted
+   * either by popularity (viewerCount desc) or recency (liveAt desc).
+   *
+   * Owner + theme cosmetic are populated so the card can render thumbnail
+   * + avatar in one round-trip; the catalog populate keeps each item
+   * lightweight (just the fields the card needs).
+   */
+  async listLive(params: {
+    page?: number;
+    limit?: number;
+    sort?: 'popular' | 'recent';
+  }) {
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(50, Math.max(1, params.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const sort: Record<string, 1 | -1> = params.sort === 'recent'
+      ? { liveAt: -1 }
+      : { viewerCount: -1, liveAt: -1 };
+
+    const filter = {
+      status: RoomStatus.ACTIVE,
+      viewerCount: { $gt: 0 },
+    };
+
+    const [items, total] = await Promise.all([
+      this.roomModel
+        .find(filter)
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .populate('ownerId', 'username displayName avatarUrl numericId level isHost')
+        .populate('themeCosmeticId')
+        .exec(),
+      this.roomModel.countDocuments(filter).exec(),
+    ]);
+
+    return {
+      items: items.map((r) => r.toJSON()),
+      page,
+      limit,
+      total,
+    };
+  }
+
   // ============== Settings (owner only) ==============
 
   async updateSettings(

@@ -65,6 +65,19 @@ export class RoomsController {
     return { room: room?.toJSON() ?? null };
   }
 
+  /// Public list of live rooms — drives the Popular / Recent grid on the
+  /// Live tab. No auth required so deep-links and not-logged-in browsing
+  /// keep working.
+  @Public()
+  @Get()
+  async listLive(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('sort') sort?: 'popular' | 'recent',
+  ) {
+    return this.rooms.listLive({ page, limit, sort });
+  }
+
   /** Public snapshot — used to render the room intro card from a deeplink. */
   @Public()
   @Get(':id')
