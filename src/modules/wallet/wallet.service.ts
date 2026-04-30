@@ -326,6 +326,158 @@ export class WalletService {
     }
   }
 
+  // ----------- Diamond → Coin conversion -----------
+
+  /**
+   * Atomically debit diamonds and credit coins on the same wallet doc.
+   * Idempotent on the supplied key — same key returns the original txn
+   * pair without doing anything else.
+   *
+   * Two ledger entries are written, one DEBIT + one CREDIT, both with
+   * type=CONVERSION and the same correlationId so they can be reconciled
+   * later. The wallet's coin/diamond counters update in a single
+   * findOneAndUpdate so we can't partially apply one side.
+   */
+  async convertDiamondsToCoins(p: {
+    userId: string;
+    diamondsRequired: number;
+    coinsAwarded: number;
+    idempotencyKey: string;
+  }): Promise<{
+    wallet: WalletDocument;
+    diamondTxn: TransactionDocument;
+    coinTxn: TransactionDocument;
+  }> {
+    if (p.diamondsRequired <= 0 || p.coinsAwarded <= 0) {
+      throw new BadRequestException({
+        code: 'INVALID_AMOUNTS',
+        message: 'Conversion amounts must be positive',
+      });
+    }
+    if (!Types.ObjectId.isValid(p.userId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user id',
+      });
+    }
+
+    // Idempotency: re-running with the same key returns the original pair.
+    const existing = await this.txnModel
+      .find({ correlationId: p.idempotencyKey })
+      .exec();
+    if (existing.length === 2) {
+      const wallet = await this.findByUserId(p.userId);
+      if (!wallet) throw new NotFoundException('Wallet not found');
+      const diamondTxn = existing.find((t) => t.currency === Currency.DIAMONDS)!;
+      const coinTxn = existing.find((t) => t.currency === Currency.COINS)!;
+      return { wallet, diamondTxn, coinTxn };
+    }
+
+    const userObj = new Types.ObjectId(p.userId);
+    const updated = await this.walletModel
+      .findOneAndUpdate(
+        {
+          userId: userObj,
+          frozen: false,
+          diamonds: { $gte: p.diamondsRequired },
+        },
+        {
+          $inc: {
+            diamonds: -p.diamondsRequired,
+            coins: p.coinsAwarded,
+          },
+        },
+        { new: true },
+      )
+      .exec();
+
+    if (!updated) {
+      const wallet = await this.findByUserId(p.userId);
+      if (wallet?.frozen) {
+        throw new ForbiddenException({
+          code: 'WALLET_FROZEN',
+          message: 'Wallet is frozen',
+        });
+      }
+      throw new BadRequestException({
+        code: 'INSUFFICIENT_DIAMONDS',
+        message: 'Not enough diamonds for this conversion',
+        details: {
+          required: p.diamondsRequired,
+          available: wallet?.diamonds ?? 0,
+        },
+      });
+    }
+
+    const diamondKey = `${p.idempotencyKey}:diamond`;
+    const coinKey = `${p.idempotencyKey}:coin`;
+
+    let diamondTxn!: TransactionDocument;
+    let coinTxn!: TransactionDocument;
+    try {
+      const inserted = await this.txnModel.insertMany([
+        {
+          idempotencyKey: diamondKey,
+          correlationId: p.idempotencyKey,
+          walletId: updated._id,
+          userId: userObj,
+          currency: Currency.DIAMONDS,
+          direction: TxnDirection.DEBIT,
+          amount: p.diamondsRequired,
+          type: TxnType.CONVERSION,
+          description: `Diamonds → Coins`,
+          balanceAfter: updated.diamonds,
+          status: TxnStatus.COMPLETED,
+        },
+        {
+          idempotencyKey: coinKey,
+          correlationId: p.idempotencyKey,
+          walletId: updated._id,
+          userId: userObj,
+          currency: Currency.COINS,
+          direction: TxnDirection.CREDIT,
+          amount: p.coinsAwarded,
+          type: TxnType.CONVERSION,
+          description: `Coins from diamond conversion`,
+          balanceAfter: updated.coins,
+          status: TxnStatus.COMPLETED,
+        },
+      ]);
+      diamondTxn = inserted[0] as TransactionDocument;
+      coinTxn = inserted[1] as TransactionDocument;
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        // Concurrent retry — the wallet was already debited/credited above
+        // for this caller, but the ledger insert raced. Roll the wallet
+        // back so we don't double-spend.
+        await this.walletModel
+          .updateOne(
+            { _id: updated._id },
+            {
+              $inc: {
+                diamonds: p.diamondsRequired,
+                coins: -p.coinsAwarded,
+              },
+            },
+          )
+          .exec();
+        const found = await this.txnModel
+          .find({ correlationId: p.idempotencyKey })
+          .exec();
+        if (found.length === 2) {
+          diamondTxn = found.find((t) => t.currency === Currency.DIAMONDS)!;
+          coinTxn = found.find((t) => t.currency === Currency.COINS)!;
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
+
+    return { wallet: updated, diamondTxn, coinTxn };
+  }
+
   // ----------- Admin freeze / unfreeze -----------
 
   async freeze(userId: string, reason: string, by: string): Promise<WalletDocument> {
