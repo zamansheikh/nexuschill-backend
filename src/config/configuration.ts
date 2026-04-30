@@ -65,4 +65,11 @@ export const configuration = () => ({
     sendgridApiKey: process.env.SENDGRID_API_KEY,
     from: process.env.EMAIL_FROM || 'no-reply@partyapp.com',
   },
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+    apiKey: process.env.CLOUDINARY_API_KEY || '',
+    apiSecret: process.env.CLOUDINARY_API_SECRET || '',
+    uploadPreset: process.env.CLOUDINARY_UPLOAD_PRESET || '',
+    folder: process.env.CLOUDINARY_FOLDER || 'party-app',
+  },
 });

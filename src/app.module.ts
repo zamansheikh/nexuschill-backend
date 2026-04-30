@@ -10,8 +10,13 @@ import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { RedisModule } from './redis/redis.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { AgenciesModule } from './modules/agencies/agencies.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { GiftsModule } from './modules/gifts/gifts.module';
+import { MediaModule } from './modules/media/media.module';
+import { ResellersModule } from './modules/resellers/resellers.module';
 import { UsersModule } from './modules/users/users.module';
+import { WalletModule } from './modules/wallet/wallet.module';
 
 @Module({
   imports: [
@@ -62,10 +67,15 @@ import { UsersModule } from './modules/users/users.module';
 
     DatabaseModule,
     RedisModule,
+    MediaModule,
 
     UsersModule,
     AuthModule,
     AdminModule,
+    AgenciesModule,
+    WalletModule,
+    GiftsModule,
+    ResellersModule,
   ],
   controllers: [AppController],
   providers: [

@@ -36,8 +36,20 @@ export class AdminSeedService implements OnApplicationBootstrap {
         // (scopeType / isSystem) match the current catalog. This lets us ship
         // schema-level fixes without losing permission edits.
         const desiredScope = (r as any).scopeType ?? null;
+        let dirty = false;
         if (existing.scopeType !== desiredScope) {
           existing.scopeType = desiredScope;
+          dirty = true;
+        }
+        // Additive merge: any NEW permissions in the catalog get appended.
+        // Existing customizations (extra perms or removed perms) stay intact.
+        const existingPerms = new Set(existing.permissions);
+        const missing = (r.permissions as string[]).filter((p) => !existingPerms.has(p));
+        if (missing.length > 0) {
+          existing.permissions = [...existing.permissions, ...missing];
+          dirty = true;
+        }
+        if (dirty) {
           await existing.save();
           patchedCount++;
         }
@@ -47,7 +59,7 @@ export class AdminSeedService implements OnApplicationBootstrap {
       this.logger.log(`Seeded ${createdCount} default admin role(s)`);
     }
     if (patchedCount > 0) {
-      this.logger.log(`Patched scopeType on ${patchedCount} existing system role(s)`);
+      this.logger.log(`Patched ${patchedCount} existing system role(s) with catalog updates`);
     }
   }
 

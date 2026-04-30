@@ -52,6 +52,14 @@ export const PERMISSIONS = {
   WITHDRAWAL_APPROVE: 'withdrawal.approve',
   WITHDRAWAL_REJECT: 'withdrawal.reject',
 
+  // Wallets & ledger
+  WALLET_VIEW: 'wallet.view',
+  WALLET_ADJUST: 'wallet.adjust',
+  WALLET_FREEZE: 'wallet.freeze',
+  /** Permission to mint new coins (admin generates supply, no payment gateway). */
+  WALLET_MINT: 'wallet.mint',
+  TRANSACTIONS_VIEW: 'transactions.view',
+
   // Agency
   AGENCY_VIEW: 'agency.view',
   AGENCY_MANAGE: 'agency.manage',
@@ -135,8 +143,10 @@ export const DEFAULT_ROLES = [
       'store.*',
       'vip.*',
       'family.*',
-      'agency.view',
+      'agency.*',
       'reseller.view',
+      'wallet.*',
+      'transactions.view',
       'reports.*',
     ],
     isSystem: true,
@@ -164,6 +174,8 @@ export const DEFAULT_ROLES = [
     permissions: [
       'recharge.*',
       'withdrawal.*',
+      'wallet.*',
+      'transactions.view',
       'reports.*',
       'users.view',
     ],
@@ -180,6 +192,8 @@ export const DEFAULT_ROLES = [
       'recharge.view',
       'withdrawal.view',
       'moderation.view',
+      'wallet.view',
+      'transactions.view',
     ],
     isSystem: true,
     priority: 40,

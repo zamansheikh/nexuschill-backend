@@ -86,6 +86,16 @@ export class User {
   @Prop({ type: String, default: '' })
   avatarUrl!: string;
 
+  /** Cloudinary public_id for the avatar — needed to overwrite/delete it later. */
+  @Prop({ type: String, default: '' })
+  avatarPublicId!: string;
+
+  @Prop({ type: String, default: '' })
+  coverPhotoUrl!: string;
+
+  @Prop({ type: String, default: '' })
+  coverPhotoPublicId!: string;
+
   @Prop({ type: String, default: '' })
   bio!: string;
 

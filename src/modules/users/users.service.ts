@@ -11,6 +11,8 @@ export interface ListUsersParams {
   isHost?: boolean;
   country?: string;
   search?: string;
+  /** Filter to hosts assigned to this agency (only applied if isHost=true). */
+  agencyId?: string;
 }
 
 @Injectable()
@@ -99,6 +101,9 @@ export class UsersService {
     if (params.status) filter.status = params.status;
     if (params.isHost !== undefined) filter.isHost = params.isHost;
     if (params.country) filter.country = params.country.toUpperCase();
+    if (params.agencyId && Types.ObjectId.isValid(params.agencyId)) {
+      filter['hostProfile.agencyId'] = new Types.ObjectId(params.agencyId);
+    }
     if (params.search) {
       const escaped = params.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escaped, 'i');
@@ -178,5 +183,73 @@ export class UsersService {
         { $set: { linkedAdminId: adminId ? new Types.ObjectId(adminId) : null } },
       )
       .exec();
+  }
+
+  // -------------------- Profile (user-facing) --------------------
+
+  async updateProfile(
+    id: string,
+    update: Partial<{
+      displayName: string;
+      bio: string;
+      language: string;
+      country: string;
+      username: string;
+    }>,
+  ): Promise<UserDocument> {
+    const user = await this.getByIdOrThrow(id);
+
+    if (update.username !== undefined && update.username !== user.username) {
+      const lower = update.username.toLowerCase();
+      if (await this.isUsernameTaken(lower)) {
+        throw new BadRequestException({
+          code: 'USERNAME_TAKEN',
+          message: 'Username already taken',
+        });
+      }
+      user.username = lower;
+    }
+    if (update.displayName !== undefined) user.displayName = update.displayName;
+    if (update.bio !== undefined) user.bio = update.bio;
+    if (update.language !== undefined) user.language = update.language;
+    if (update.country !== undefined) user.country = update.country.toUpperCase();
+
+    await user.save();
+    return user;
+  }
+
+  async setAvatar(id: string, url: string, publicId: string): Promise<UserDocument> {
+    const user = await this.getByIdOrThrow(id);
+    user.avatarUrl = url;
+    user.avatarPublicId = publicId;
+    await user.save();
+    return user;
+  }
+
+  async setCoverPhoto(id: string, url: string, publicId: string): Promise<UserDocument> {
+    const user = await this.getByIdOrThrow(id);
+    user.coverPhotoUrl = url;
+    user.coverPhotoPublicId = publicId;
+    await user.save();
+    return user;
+  }
+
+  /**
+   * Strips fields that should never be exposed via public profile lookups
+   * (other users viewing this user). Owner-side endpoints return the raw doc.
+   */
+  toPublic(user: UserDocument): Record<string, unknown> {
+    const json = user.toJSON() as Record<string, any>;
+    delete json.email;
+    delete json.phone;
+    delete json.providers;
+    delete json.emailVerified;
+    delete json.phoneVerified;
+    delete json.lastLoginAt;
+    delete json.banReason;
+    delete json.bannedAt;
+    delete json.bannedBy;
+    delete json.linkedAdminId;
+    return json;
   }
 }
