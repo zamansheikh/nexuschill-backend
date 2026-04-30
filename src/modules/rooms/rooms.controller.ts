@@ -26,6 +26,7 @@ import {
   SendChatDto,
   UpdateRoomSettingsDto,
 } from './dto/room.dto';
+import { GiftsService } from '../gifts/gifts.service';
 import { RoomKind } from './schemas/room.schema';
 import { RoomsService } from './rooms.service';
 
@@ -36,7 +37,10 @@ import { RoomsService } from './rooms.service';
  */
 @Controller({ path: 'rooms', version: '1' })
 export class RoomsController {
-  constructor(private readonly rooms: RoomsService) {}
+  constructor(
+    private readonly rooms: RoomsService,
+    private readonly gifts: GiftsService,
+  ) {}
 
   // ---------- Lifecycle ----------
 
@@ -289,5 +293,19 @@ export class RoomsController {
   ) {
     const message = await this.rooms.sendChat(id, current.userId, dto.text);
     return { message };
+  }
+
+  // ---------- Gift transaction history ----------
+
+  /// All gifts ever sent in this room. Anyone can read; auth required so
+  /// scrapers don't enumerate the gift ledger.
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/gifts')
+  async listGifts(
+    @Param('id') id: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.gifts.listForRoom(id, { page, limit });
   }
 }

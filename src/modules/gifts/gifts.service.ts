@@ -8,6 +8,9 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 
+import { MediaService } from '../media/media.service';
+import { RealtimeService } from '../realtime/realtime.service';
+import { RealtimeEventType } from '../realtime/realtime.types';
 import { UserDocument, UserStatus } from '../users/schemas/user.schema';
 import { UsersService } from '../users/users.service';
 import { WalletService } from '../wallet/wallet.service';
@@ -32,7 +35,33 @@ export class GiftsService {
     @InjectModel(GiftEvent.name) private readonly eventModel: Model<GiftEventDocument>,
     private readonly users: UsersService,
     private readonly wallet: WalletService,
+    private readonly media: MediaService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  // ============== Asset uploads (admin) ==============
+
+  /// Upload a thumbnail image to Cloudinary. Returns the secure URL +
+  /// public_id so the admin form can persist both on the gift record.
+  async uploadThumbnail(
+    buffer: Buffer,
+  ): Promise<{ url: string; publicId: string }> {
+    const res = await this.media.uploadImage(buffer, { folder: 'gifts/thumbnails' });
+    return { url: res.secure_url, publicId: res.public_id };
+  }
+
+  /// Upload an animated asset (SVGA / Lottie / MP4). `resourceType` is
+  /// `'raw'` for SVGA + Lottie JSON, `'video'` for MP4/WebM.
+  async uploadAnimation(
+    buffer: Buffer,
+    resourceType: 'raw' | 'video',
+  ): Promise<{ url: string; publicId: string }> {
+    const res = await this.media.uploadAsset(buffer, {
+      folder: 'gifts/animations',
+      resourceType,
+    });
+    return { url: res.secure_url, publicId: res.public_id };
+  }
 
   // ============== Catalog (admin) ==============
 
@@ -168,6 +197,38 @@ export class GiftsService {
     await gift.save();
   }
 
+  /// Hard-delete a gift permanently. Only allowed when no gift sends
+  /// reference it (`totalSent === 0`) — otherwise GiftEvent rows would
+  /// be orphaned and the ledger would lose its joinable reference.
+  /// For gifts that have been sent, the soft-delete (deactivate) path
+  /// is the correct way to retire them.
+  async purge(id: string): Promise<void> {
+    const gift = await this.getByIdOrThrow(id);
+    if (gift.totalSent > 0) {
+      throw new ConflictException({
+        code: 'GIFT_HAS_SENDS',
+        message:
+          'Cannot permanently delete a gift that has been sent. Deactivate it instead.',
+        details: { totalSent: gift.totalSent },
+      });
+    }
+    // Best-effort Cloudinary cleanup — don't block the deletion if it fails.
+    if (gift.thumbnailPublicId) {
+      this.media
+        .deleteImage(gift.thumbnailPublicId)
+        .catch(() => undefined);
+    }
+    if (gift.animationPublicId) {
+      // SVGA + Lottie live under Cloudinary's "raw" resource_type;
+      // MP4/WebM under "video". Match the upload-time mapping.
+      const resourceType: 'raw' | 'video' = gift.assetType === 'mp4' ? 'video' : 'raw';
+      this.media
+        .deleteAsset(gift.animationPublicId, resourceType)
+        .catch(() => undefined);
+    }
+    await this.giftModel.deleteOne({ _id: gift._id }).exec();
+  }
+
   // ============== Send gift (user-facing) ==============
 
   async sendGift(input: {
@@ -281,8 +342,94 @@ export class GiftsService {
       .exec()
       .catch(() => undefined);
 
+    // Fan out a realtime event for room-context gifts so every viewer's
+    // overlay plays in sync. Sender + receiver fields are hydrated for
+    // the chat banner; the payload also carries the gift metadata so the
+    // SVGA player doesn't need a separate catalog round-trip.
+    if (
+      (input.contextType ?? GiftContext.PROFILE) === GiftContext.ROOM &&
+      input.contextId &&
+      Types.ObjectId.isValid(input.contextId)
+    ) {
+      const [sender, receiver] = await Promise.all([
+        this.users.getByIdOrThrow(input.senderId).catch(() => null),
+        this.users.getByIdOrThrow(input.receiverId).catch(() => null),
+      ]);
+      void this.realtime.emitToRoom(
+        input.contextId,
+        RealtimeEventType.ROOM_GIFT_SENT,
+        {
+          eventId: event._id.toString(),
+          gift: {
+            id: gift._id.toString(),
+            code: gift.code,
+            name: gift.name,
+            thumbnailUrl: gift.thumbnailUrl,
+            animationUrl: gift.animationUrl,
+            assetType: gift.assetType,
+            durationMs: gift.durationMs,
+            priceCoins: gift.priceCoins,
+          },
+          count: input.count,
+          totalCoinAmount,
+          totalDiamondReward,
+          sender: sender
+            ? {
+                id: sender._id.toString(),
+                username: sender.username,
+                displayName: sender.displayName,
+                avatarUrl: sender.avatarUrl,
+                numericId: sender.numericId,
+              }
+            : null,
+          receiver: receiver
+            ? {
+                id: receiver._id.toString(),
+                username: receiver.username,
+                displayName: receiver.displayName,
+                avatarUrl: receiver.avatarUrl,
+                numericId: receiver.numericId,
+              }
+            : null,
+        },
+      );
+    }
+
     const wallet = await this.wallet.findByUserId(input.senderId);
     return { event, senderWallet: wallet };
+  }
+
+  // ============== Room transaction history ==============
+
+  /// All gifts sent in a room — drives the in-room transaction-history
+  /// view. Newest-first with sender + receiver + gift populated.
+  async listForRoom(
+    roomId: string,
+    params: { page?: number; limit?: number } = {},
+  ) {
+    if (!Types.ObjectId.isValid(roomId)) {
+      throw new BadRequestException({ code: 'INVALID_ROOM_ID', message: 'Invalid room id' });
+    }
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(100, Math.max(1, params.limit ?? 30));
+    const skip = (page - 1) * limit;
+    const filter = {
+      contextType: GiftContext.ROOM,
+      contextId: new Types.ObjectId(roomId),
+    };
+    const [items, total] = await Promise.all([
+      this.eventModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('senderId', 'username displayName avatarUrl numericId')
+        .populate('receiverId', 'username displayName avatarUrl numericId')
+        .populate('giftId')
+        .exec(),
+      this.eventModel.countDocuments(filter).exec(),
+    ]);
+    return { items: items.map((e) => e.toJSON()), page, limit, total };
   }
 
   // ============== History ==============

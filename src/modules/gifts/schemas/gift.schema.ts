@@ -10,6 +10,16 @@ export enum GiftCategory {
   LIMITED = 'limited',
 }
 
+/// Mirrors the cosmetics CosmeticAssetType enum so the mobile gift overlay
+/// can pick the right player without a second mapping pass.
+export enum GiftAssetType {
+  IMAGE = 'image',
+  SVGA = 'svga',
+  LOTTIE = 'lottie',
+  MP4 = 'mp4',
+  NONE = 'none',
+}
+
 @Schema({ _id: false })
 export class LocalizedString {
   @Prop({ type: String, default: '' })
@@ -60,8 +70,22 @@ export class Gift {
   @Prop({ type: String, default: '' })
   thumbnailUrl!: string;
 
+  /// Cloudinary public_id of the thumbnail — needed to overwrite/delete
+  /// later from the admin panel.
+  @Prop({ type: String, default: '' })
+  thumbnailPublicId!: string;
+
   @Prop({ type: String, default: '' })
   animationUrl!: string;
+
+  @Prop({ type: String, default: '' })
+  animationPublicId!: string;
+
+  /// Tells the mobile overlay which player to use (svga / lottie / mp4).
+  /// `image` for legacy gifts that only have a thumbnail; `none` for
+  /// admin-typed entries before assets are uploaded.
+  @Prop({ type: String, enum: GiftAssetType, default: GiftAssetType.NONE })
+  assetType!: GiftAssetType;
 
   @Prop({ type: String, default: '' })
   soundUrl!: string;

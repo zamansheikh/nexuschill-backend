@@ -16,7 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { GiftCategory } from '../schemas/gift.schema';
+import { GiftAssetType, GiftCategory } from '../schemas/gift.schema';
 import { GiftContext } from '../schemas/gift-event.schema';
 
 class LocalizedDto {
@@ -63,8 +63,22 @@ export class CreateGiftDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
+  thumbnailPublicId?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(500)
   animationUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  animationPublicId?: string;
+
+  @IsOptional()
+  @IsEnum(GiftAssetType)
+  assetType?: GiftAssetType;
 
   @IsOptional()
   @IsString()
@@ -154,8 +168,22 @@ export class UpdateGiftDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
+  thumbnailPublicId?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(500)
   animationUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  animationPublicId?: string;
+
+  @IsOptional()
+  @IsEnum(GiftAssetType)
+  assetType?: GiftAssetType;
 
   @IsOptional()
   @IsString()

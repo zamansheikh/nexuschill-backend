@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
 import { AgoraModule } from '../agora/agora.module';
+import { GiftsModule } from '../gifts/gifts.module';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { RoomsAdminController } from './rooms-admin.controller';
 import { RoomsController } from './rooms.controller';
@@ -26,6 +27,8 @@ import { Room, RoomSchema } from './schemas/room.schema';
       { name: User.name, schema: UserSchema },
     ]),
     AgoraModule,
+    // Imported so the room controller can list a room's gift transactions.
+    GiftsModule,
   ],
   controllers: [RoomsController, RoomsAdminController],
   providers: [RoomsService],
