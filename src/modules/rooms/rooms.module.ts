@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
 import { AgoraModule } from '../agora/agora.module';
+import { CosmeticsModule } from '../cosmetics/cosmetics.module';
 import { GiftsModule } from '../gifts/gifts.module';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { RoomsAdminController } from './rooms-admin.controller';
@@ -29,6 +30,9 @@ import { Room, RoomSchema } from './schemas/room.schema';
     AgoraModule,
     // Imported so the room controller can list a room's gift transactions.
     GiftsModule,
+    // Imported so RoomsService can resolve a joining user's equipped
+    // vehicle and embed it in the ROOM_MEMBER_JOINED realtime event.
+    CosmeticsModule,
   ],
   controllers: [RoomsController, RoomsAdminController],
   providers: [RoomsService],

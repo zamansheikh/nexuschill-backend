@@ -15,6 +15,7 @@ import { AgoraService } from '../agora/agora.service';
 import { RtcRoleDto } from '../agora/dto/agora.dto';
 import { NumericIdService } from '../common/numeric-id.service';
 import { CounterScope } from '../common/schemas/counter.schema';
+import { CosmeticsService } from '../cosmetics/cosmetics.service';
 import { GiftsService } from '../gifts/gifts.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RealtimeEventType } from '../realtime/realtime.types';
@@ -70,6 +71,7 @@ export class RoomsService {
     private readonly agora: AgoraService,
     private readonly realtime: RealtimeService,
     private readonly gifts: GiftsService,
+    private readonly cosmetics: CosmeticsService,
   ) {}
 
   // ============== Lifecycle ==============
@@ -454,11 +456,20 @@ export class RoomsService {
     // Notify everyone already in the room that someone joined. We hydrate
     // the user fields the UI needs (avatar, name, level, frame cosmetic);
     // viewerCount is included so the header counter updates in lockstep.
+    // The joiner's equipped vehicle (if any) is shipped in the same
+    // event so receivers can play a Bigo/Hapi-style fullscreen entry
+    // animation without an extra round-trip to fetch cosmetics.
     if (firstTimeJoin) {
-      const joiner = await this.userModel
-        .findById(userOid)
-        .select('username displayName avatarUrl numericId level isHost')
-        .exec();
+      const [joiner, equipped] = await Promise.all([
+        this.userModel
+          .findById(userOid)
+          .select('username displayName avatarUrl numericId level isHost')
+          .exec(),
+        this.cosmetics.listEquippedForUsers([userId]),
+      ]);
+      const vehicle = equipped
+        .map((row) => row.cosmeticItemId as any)
+        .find((item) => item && item.type === 'vehicle');
       void this.realtime.emitToRoom(
         room._id.toString(),
         RealtimeEventType.ROOM_MEMBER_JOINED,
@@ -466,6 +477,10 @@ export class RoomsService {
           user: joiner?.toJSON() ?? null,
           role,
           viewerCount: room.viewerCount + 1,
+          // Null when the joiner doesn't own/equip a vehicle. The
+          // cosmetic is fully populated (preview + animation URLs +
+          // assetType) so the mobile overlay plays directly.
+          vehicle: vehicle ? vehicle.toJSON() : null,
         },
       );
     }
