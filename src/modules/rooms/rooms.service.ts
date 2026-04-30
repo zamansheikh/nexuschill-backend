@@ -453,46 +453,45 @@ export class RoomsService {
       firstTimeJoin = true;
     }
 
-    // Notify everyone already in the room that someone joined. We hydrate
-    // the user fields the UI needs (avatar, name, level, frame cosmetic);
-    // viewerCount is included so the header counter updates in lockstep.
-    // The joiner's equipped vehicle (if any) is shipped in the same
-    // event so receivers can play a Bigo/Hapi-style fullscreen entry
-    // animation without an extra round-trip to fetch cosmetics.
-    if (firstTimeJoin) {
-      const [joiner, equipped] = await Promise.all([
-        this.userModel
-          .findById(userOid)
-          .select('username displayName avatarUrl numericId level isHost')
-          .exec(),
-        this.cosmetics.listEquippedForUsers([userId]),
-      ]);
-      // `equipped` is the plain JSON shape (cache-friendly) returned
-      // by CosmeticsService.listEquippedForUsers. Each row's
-      // `cosmeticItemId` is the inline CosmeticItem JSON, so we look
-      // for the vehicle there directly.
-      const vehicle = equipped
-        .map((row) => row.cosmeticItemId)
-        .find(
-          (item): item is Record<string, unknown> =>
-            !!item &&
-            typeof item === 'object' &&
-            (item as Record<string, unknown>).type === 'vehicle',
-        );
-      void this.realtime.emitToRoom(
-        room._id.toString(),
-        RealtimeEventType.ROOM_MEMBER_JOINED,
-        {
-          user: joiner?.toJSON() ?? null,
-          role,
-          viewerCount: room.viewerCount + 1,
-          // Null when the joiner doesn't own/equip a vehicle. The
-          // cosmetic is fully populated (preview + animation URLs +
-          // assetType) so the mobile overlay plays directly.
-          vehicle: vehicle ?? null,
-        },
+    // Always notify on enter — the entry-effect overlay should fire
+    // even when the joiner had a stale RoomMember row from a prior
+    // session (app killed without leave, network drop, owner
+    // re-entering their own room). Gating on `firstTimeJoin` made the
+    // effect silently disappear for the most common test path. The
+    // viewerCount in the payload still reflects truth: bumped when
+    // it's a real first-time join, otherwise unchanged.
+    const [joiner, equipped] = await Promise.all([
+      this.userModel
+        .findById(userOid)
+        .select('username displayName avatarUrl numericId level isHost')
+        .exec(),
+      this.cosmetics.listEquippedForUsers([userId]),
+    ]);
+    // `equipped` is the plain JSON shape (cache-friendly) returned
+    // by CosmeticsService.listEquippedForUsers. Each row's
+    // `cosmeticItemId` is the inline CosmeticItem JSON, so we look
+    // for the vehicle there directly.
+    const vehicle = equipped
+      .map((row) => row.cosmeticItemId)
+      .find(
+        (item): item is Record<string, unknown> =>
+          !!item &&
+          typeof item === 'object' &&
+          (item as Record<string, unknown>).type === 'vehicle',
       );
-    }
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.ROOM_MEMBER_JOINED,
+      {
+        user: joiner?.toJSON() ?? null,
+        role,
+        viewerCount: room.viewerCount + (firstTimeJoin ? 1 : 0),
+        // Null when the joiner doesn't own/equip a vehicle. The
+        // cosmetic is fully populated (preview + animation URLs +
+        // assetType) so the mobile overlay plays directly.
+        vehicle: vehicle ?? null,
+      },
+    );
 
     // Mint a subscriber token by default — sufficient to listen. Taking a
     // seat re-mints with publisher role.
