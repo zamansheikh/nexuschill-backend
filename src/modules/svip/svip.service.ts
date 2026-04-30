@@ -111,6 +111,17 @@ export class SvipService {
   }
 
   /**
+   * Quick check used by other modules to gate behavior. e.g. the chat
+   * module's mute action calls `userHasPrivilege(targetId, 'cant_be_ban_public_chat')`
+   * before applying. Caches nothing — this is one indexed read of the
+   * status doc plus a small tiers query. Cache at the call site if hot.
+   */
+  async userHasPrivilege(userId: string, key: string): Promise<boolean> {
+    const all = await this.resolvedPrivileges(userId);
+    return all.includes(key);
+  }
+
+  /**
    * Aggregated set of privilege keys the user currently enjoys, derived
    * from their currentLevel. Returns [] for non-SVIP users.
    */
