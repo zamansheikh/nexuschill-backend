@@ -308,12 +308,26 @@ export class RoomsService {
       }
     }
     await room.save();
-    // Push the new settings to everyone currently in the room so their UI
-    // updates without a refetch.
+    // Re-read seats — when micCount changes, resizeSeats() either added
+    // new empty rows or trimmed unoccupied tail rows. Audience clients
+    // only see this event (the owner refetches their own snapshot), so
+    // shipping the seats list in the payload is the cheapest way to
+    // keep their grid honest without a separate REST round-trip.
+    const seats = await this.seatModel
+      .find({ roomId: room._id })
+      .sort({ seatIndex: 1 })
+      .populate(
+        'userId',
+        'username displayName avatarUrl numericId level isHost',
+      )
+      .exec();
     void this.realtime.emitToRoom(
       room._id.toString(),
       RealtimeEventType.ROOM_SETTINGS_UPDATED,
-      { room: room.toJSON() },
+      {
+        room: room.toJSON(),
+        seats: seats.map((s) => s.toJSON()),
+      },
     );
     return room;
   }
