@@ -65,6 +65,15 @@ export const HostProfileSchema = SchemaFactory.createForClass(HostProfile);
   },
 })
 export class User {
+  /**
+   * 7-digit public ID (1_000_000+), separate from the Mongo ObjectId. Users
+   * see and search by this; partners use it as the user-facing handle.
+   * Sparse so legacy rows from before the rollout can coexist until the
+   * backfill migration assigns one.
+   */
+  @Prop({ type: Number, unique: true, sparse: true, index: true })
+  numericId?: number;
+
   @Prop({ type: String, lowercase: true, trim: true, sparse: true, unique: true })
   email?: string;
 
@@ -163,6 +172,7 @@ export const UserSchema = SchemaFactory.createForClass(User);
 UserSchema.index({ email: 1 }, { unique: true, sparse: true });
 UserSchema.index({ phone: 1 }, { unique: true, sparse: true });
 UserSchema.index({ username: 1 }, { unique: true, sparse: true });
+UserSchema.index({ numericId: 1 }, { unique: true, sparse: true });
 UserSchema.index({ createdAt: -1 });
 UserSchema.index({ status: 1 });
 UserSchema.index({ isHost: 1, status: 1 });

@@ -9,6 +9,8 @@ import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, FilterQuery, Model, Types } from 'mongoose';
 
 import { AuthenticatedAdmin } from '../admin/admin-auth/strategies/admin-jwt.strategy';
+import { NumericIdService } from '../common/numeric-id.service';
+import { CounterScope } from '../common/schemas/counter.schema';
 import {
   Currency,
   Transaction,
@@ -42,6 +44,7 @@ export class ResellersService {
     @InjectModel(Wallet.name) private readonly walletModel: Model<WalletDocument>,
     @InjectModel(Transaction.name) private readonly txnModel: Model<TransactionDocument>,
     @InjectConnection() private readonly connection: Connection,
+    private readonly numericIds: NumericIdService,
   ) {}
 
   // ----------- Scope filtering (mirrors AgenciesService) -----------
@@ -86,7 +89,11 @@ export class ResellersService {
     if (params.search) {
       const escaped = params.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escaped, 'i');
-      filter.$or = [{ name: regex }, { code: regex }];
+      const or: FilterQuery<ResellerDocument>[] = [{ name: regex }, { code: regex }];
+      if (/^\d{1,7}$/.test(params.search.trim())) {
+        or.push({ numericId: parseInt(params.search.trim(), 10) });
+      }
+      filter.$or = or;
     }
 
     const [items, total] = await Promise.all([
@@ -109,19 +116,22 @@ export class ResellersService {
         message: `Reseller code "${codeUpper}" already in use`,
       });
     }
-    return this.resellerModel.create({
-      ...input,
-      code: codeUpper,
-      country: (input.country ?? 'BD').toUpperCase(),
-      status: ResellerStatus.ACTIVE,
-      coinPool: 0,
-      lifetimeCoinsReceived: 0,
-      lifetimeCoinsAssigned: 0,
-      createdBy:
-        input.createdBy && Types.ObjectId.isValid(input.createdBy)
-          ? new Types.ObjectId(input.createdBy)
-          : null,
-    });
+    return this.numericIds.createWithId(CounterScope.RESELLER, (numericId) =>
+      this.resellerModel.create({
+        ...input,
+        numericId,
+        code: codeUpper,
+        country: (input.country ?? 'BD').toUpperCase(),
+        status: ResellerStatus.ACTIVE,
+        coinPool: 0,
+        lifetimeCoinsReceived: 0,
+        lifetimeCoinsAssigned: 0,
+        createdBy:
+          input.createdBy && Types.ObjectId.isValid(input.createdBy)
+            ? new Types.ObjectId(input.createdBy)
+            : null,
+      }),
+    );
   }
 
   async update(

@@ -2,6 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 
+import { CounterScope } from '../common/schemas/counter.schema';
+import { NumericIdService } from '../common/numeric-id.service';
 import { AuthProvider, HostTier, User, UserDocument, UserStatus } from './schemas/user.schema';
 
 export interface ListUsersParams {
@@ -17,11 +19,19 @@ export interface ListUsersParams {
 
 @Injectable()
 export class UsersService {
-  constructor(@InjectModel(User.name) private readonly userModel: Model<UserDocument>) {}
+  constructor(
+    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    private readonly numericIds: NumericIdService,
+  ) {}
 
   async findById(id: string): Promise<UserDocument | null> {
     if (!Types.ObjectId.isValid(id)) return null;
     return this.userModel.findById(id).exec();
+  }
+
+  async findByNumericId(numericId: number): Promise<UserDocument | null> {
+    if (!Number.isInteger(numericId)) return null;
+    return this.userModel.findOne({ numericId }).exec();
   }
 
   async findByEmail(email: string, withPassword = false): Promise<UserDocument | null> {
@@ -50,14 +60,17 @@ export class UsersService {
     username?: string;
     displayName?: string;
   }): Promise<UserDocument> {
-    return this.userModel.create({
-      email: params.email.toLowerCase(),
-      passwordHash: params.passwordHash,
-      username: params.username?.toLowerCase(),
-      displayName: params.displayName || params.username || '',
-      providers: [AuthProvider.EMAIL],
-      emailVerified: false,
-    });
+    return this.numericIds.createWithId(CounterScope.USER, (numericId) =>
+      this.userModel.create({
+        numericId,
+        email: params.email.toLowerCase(),
+        passwordHash: params.passwordHash,
+        username: params.username?.toLowerCase(),
+        displayName: params.displayName || params.username || '',
+        providers: [AuthProvider.EMAIL],
+        emailVerified: false,
+      }),
+    );
   }
 
   async createWithPhone(params: {
@@ -65,13 +78,16 @@ export class UsersService {
     username?: string;
     displayName?: string;
   }): Promise<UserDocument> {
-    return this.userModel.create({
-      phone: params.phone,
-      username: params.username?.toLowerCase(),
-      displayName: params.displayName || '',
-      providers: [AuthProvider.PHONE],
-      phoneVerified: true,
-    });
+    return this.numericIds.createWithId(CounterScope.USER, (numericId) =>
+      this.userModel.create({
+        numericId,
+        phone: params.phone,
+        username: params.username?.toLowerCase(),
+        displayName: params.displayName || '',
+        providers: [AuthProvider.PHONE],
+        phoneVerified: true,
+      }),
+    );
   }
 
   /** Find an existing user by Google sub OR by email (email-verified Google login). */
@@ -87,14 +103,17 @@ export class UsersService {
     displayName?: string;
     avatarUrl?: string;
   }): Promise<UserDocument> {
-    return this.userModel.create({
-      email: params.email.toLowerCase(),
-      googleId: params.googleId,
-      displayName: params.displayName ?? '',
-      avatarUrl: params.avatarUrl ?? '',
-      providers: [AuthProvider.GOOGLE],
-      emailVerified: true,
-    });
+    return this.numericIds.createWithId(CounterScope.USER, (numericId) =>
+      this.userModel.create({
+        numericId,
+        email: params.email.toLowerCase(),
+        googleId: params.googleId,
+        displayName: params.displayName ?? '',
+        avatarUrl: params.avatarUrl ?? '',
+        providers: [AuthProvider.GOOGLE],
+        emailVerified: true,
+      }),
+    );
   }
 
   /** Attach a Google id to an existing user (signed up by email originally). */
@@ -143,12 +162,17 @@ export class UsersService {
     if (params.search) {
       const escaped = params.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escaped, 'i');
-      filter.$or = [
+      const or: FilterQuery<UserDocument>[] = [
         { email: regex },
         { phone: regex },
         { username: regex },
         { displayName: regex },
       ];
+      // Pure-digit search → also match numericId exactly.
+      if (/^\d{1,7}$/.test(params.search.trim())) {
+        or.push({ numericId: parseInt(params.search.trim(), 10) });
+      }
+      filter.$or = or;
     }
 
     const [items, total] = await Promise.all([

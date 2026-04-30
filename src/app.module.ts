@@ -12,6 +12,7 @@ import { RedisModule } from './redis/redis.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AgenciesModule } from './modules/agencies/agencies.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { CommonModule } from './modules/common/common.module';
 import { GiftsModule } from './modules/gifts/gifts.module';
 import { MediaModule } from './modules/media/media.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
@@ -68,6 +69,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     DatabaseModule,
     RedisModule,
     MediaModule,
+    CommonModule,
 
     UsersModule,
     AuthModule,

@@ -21,6 +21,10 @@ export enum AgencyStatus {
   },
 })
 export class Agency {
+  /** 7-digit public ID (1_000_000+) — see User.numericId for rationale. */
+  @Prop({ type: Number, unique: true, sparse: true, index: true })
+  numericId?: number;
+
   @Prop({ type: String, required: true, trim: true })
   name!: string;
 
@@ -67,4 +71,5 @@ export class Agency {
 export const AgencySchema = SchemaFactory.createForClass(Agency);
 AgencySchema.index({ code: 1 }, { unique: true });
 AgencySchema.index({ name: 1 });
+AgencySchema.index({ numericId: 1 }, { unique: true, sparse: true });
 AgencySchema.index({ createdAt: -1 });

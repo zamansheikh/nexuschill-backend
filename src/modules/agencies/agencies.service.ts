@@ -9,6 +9,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 
 import { AuthenticatedAdmin } from '../admin/admin-auth/strategies/admin-jwt.strategy';
+import { NumericIdService } from '../common/numeric-id.service';
+import { CounterScope } from '../common/schemas/counter.schema';
 import { UsersService } from '../users/users.service';
 import { Agency, AgencyDocument, AgencyStatus } from './schemas/agency.schema';
 
@@ -37,6 +39,7 @@ export class AgenciesService {
   constructor(
     @InjectModel(Agency.name) private readonly agencyModel: Model<AgencyDocument>,
     private readonly users: UsersService,
+    private readonly numericIds: NumericIdService,
   ) {}
 
   /**
@@ -84,7 +87,15 @@ export class AgenciesService {
     if (params.search) {
       const escaped = params.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escaped, 'i');
-      filter.$or = [{ name: regex }, { code: regex }, { description: regex }];
+      const or: FilterQuery<AgencyDocument>[] = [
+        { name: regex },
+        { code: regex },
+        { description: regex },
+      ];
+      if (/^\d{1,7}$/.test(params.search.trim())) {
+        or.push({ numericId: parseInt(params.search.trim(), 10) });
+      }
+      filter.$or = or;
     }
 
     const [items, total] = await Promise.all([
@@ -108,18 +119,21 @@ export class AgenciesService {
         message: `Agency code "${codeUpper}" already in use`,
       });
     }
-    return this.agencyModel.create({
-      name: input.name,
-      code: codeUpper,
-      description: input.description ?? '',
-      country: (input.country ?? 'BD').toUpperCase(),
-      logoUrl: input.logoUrl ?? '',
-      contactEmail: input.contactEmail ?? '',
-      contactPhone: input.contactPhone ?? '',
-      commissionRate: input.commissionRate ?? 30,
-      status: AgencyStatus.ACTIVE,
-      createdBy: input.createdBy ? new Types.ObjectId(input.createdBy) : null,
-    });
+    return this.numericIds.createWithId(CounterScope.AGENCY, (numericId) =>
+      this.agencyModel.create({
+        numericId,
+        name: input.name,
+        code: codeUpper,
+        description: input.description ?? '',
+        country: (input.country ?? 'BD').toUpperCase(),
+        logoUrl: input.logoUrl ?? '',
+        contactEmail: input.contactEmail ?? '',
+        contactPhone: input.contactPhone ?? '',
+        commissionRate: input.commissionRate ?? 30,
+        status: AgencyStatus.ACTIVE,
+        createdBy: input.createdBy ? new Types.ObjectId(input.createdBy) : null,
+      }),
+    );
   }
 
   async update(

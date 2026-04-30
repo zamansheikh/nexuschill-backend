@@ -21,6 +21,10 @@ export enum ResellerStatus {
   },
 })
 export class Reseller {
+  /** 7-digit public ID (1_000_000+) — see User.numericId for rationale. */
+  @Prop({ type: Number, unique: true, sparse: true, index: true })
+  numericId?: number;
+
   @Prop({ type: String, required: true, trim: true })
   name!: string;
 
@@ -79,4 +83,5 @@ export class Reseller {
 export const ResellerSchema = SchemaFactory.createForClass(Reseller);
 ResellerSchema.index({ code: 1 }, { unique: true });
 ResellerSchema.index({ name: 1 });
+ResellerSchema.index({ numericId: 1 }, { unique: true, sparse: true });
 ResellerSchema.index({ createdAt: -1 });
