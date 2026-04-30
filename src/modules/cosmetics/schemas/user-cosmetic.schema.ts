@@ -16,13 +16,23 @@ export enum CosmeticSource {
   ADMIN_GRANT = 'admin_grant',
 }
 
+// Helper: stringify only when the value is an ObjectId. When a ref has
+// been .populate()'d, it's a plain object — calling .toString() on it
+// returns the literal "[object Object]", so we leave populated subdocs
+// alone and let their own schema toJSON handle them.
+function refToId(v: unknown): unknown {
+  if (v == null) return v;
+  if (v instanceof Types.ObjectId) return v.toString();
+  return v;
+}
+
 @Schema({
   timestamps: true,
   toJSON: {
     transform: (_doc, ret: Record<string, any>) => {
       ret.id = ret._id?.toString();
-      ret.userId = ret.userId?.toString();
-      ret.cosmeticItemId = ret.cosmeticItemId?.toString();
+      ret.userId = refToId(ret.userId);
+      ret.cosmeticItemId = refToId(ret.cosmeticItemId);
       delete ret._id;
       delete ret.__v;
       return ret;

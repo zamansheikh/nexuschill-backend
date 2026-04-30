@@ -15,12 +15,21 @@ export enum StoreCategory {
   RING = 'ring',
 }
 
+// Stringify only ObjectId refs. Populated subdocuments are plain objects —
+// calling .toString() on those produces "[object Object]" which is the
+// classic JS footgun.
+function refToId(v: unknown): unknown {
+  if (v == null) return v;
+  if (v instanceof Types.ObjectId) return v.toString();
+  return v;
+}
+
 @Schema({
   timestamps: true,
   toJSON: {
     transform: (_doc, ret: Record<string, any>) => {
       ret.id = ret._id?.toString();
-      ret.cosmeticItemId = ret.cosmeticItemId?.toString();
+      ret.cosmeticItemId = refToId(ret.cosmeticItemId);
       delete ret._id;
       delete ret.__v;
       return ret;
