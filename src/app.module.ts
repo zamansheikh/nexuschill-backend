@@ -11,6 +11,7 @@ import { DatabaseModule } from './database/database.module';
 import { RedisModule } from './redis/redis.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AgenciesModule } from './modules/agencies/agencies.module';
+import { AgoraModule } from './modules/agora/agora.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BannersModule } from './modules/banners/banners.module';
 import { CommonModule } from './modules/common/common.module';
@@ -88,6 +89,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     StoreModule,
     BannersModule,
     DailyRewardModule,
+    AgoraModule,
   ],
   controllers: [AppController],
   providers: [

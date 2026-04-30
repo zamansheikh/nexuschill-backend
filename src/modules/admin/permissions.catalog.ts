@@ -96,6 +96,12 @@ export const PERMISSIONS = {
   DAILY_REWARD_VIEW: 'daily_reward.view',
   DAILY_REWARD_MANAGE: 'daily_reward.manage',
 
+  // Agora — RTC/RTM credentials. View shows masked certificate; manage
+  // can rotate keys. Token-mint endpoints are user-side and don't need
+  // an admin permission.
+  AGORA_VIEW: 'agora.view',
+  AGORA_MANAGE: 'agora.manage',
+
   // Families
   FAMILY_VIEW: 'family.view',
   FAMILY_MANAGE: 'family.manage',
@@ -158,6 +164,7 @@ export const DEFAULT_ROLES = [
       'cosmetics.*',
       'banners.*',
       'daily_reward.*',
+      'agora.*',
       'family.*',
       'agency.*',
       'reseller.view',
