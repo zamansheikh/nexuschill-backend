@@ -68,6 +68,16 @@ export class DailyRewardService {
     return cfg;
   }
 
+  /**
+   * Same as getOrCreateConfig but populates each reward's cosmeticItemId
+   * with the full CosmeticItem so the user-facing modal can render the
+   * preview image and name without a second round-trip.
+   */
+  async getPopulatedConfig(): Promise<DailyRewardConfigDocument> {
+    const cfg = await this.getOrCreateConfig();
+    return cfg.populate('days.rewards.cosmeticItemId');
+  }
+
   async upsertConfig(input: any): Promise<DailyRewardConfigDocument> {
     // Validate per-day reward shapes — each item needs the right field set.
     for (const day of input.days) {
@@ -118,7 +128,7 @@ export class DailyRewardService {
    * tiles, and their current streak position.
    */
   async getStateForUser(userId: string) {
-    const cfg = await this.getOrCreateConfig();
+    const cfg = await this.getPopulatedConfig();
     const state = await this.getOrCreateUserState(userId);
 
     // Detect cycle config change → reset streak so the user starts fresh.
@@ -182,9 +192,18 @@ export class DailyRewardService {
           refType: 'daily_reward',
         });
       } else if (r.kind === RewardKind.COSMETIC && r.cosmeticItemId) {
+        // After populate, cosmeticItemId may be the full CosmeticItem
+        // document. Pull the id back out either way.
+        const v = r.cosmeticItemId as unknown;
+        const cosmeticId =
+          v instanceof Types.ObjectId
+            ? v.toString()
+            : (v as { _id?: { toString(): string }; id?: string })._id?.toString() ??
+              (v as { id?: string }).id ??
+              String(v);
         await this.cosmetics.grantToUser({
           userId,
-          cosmeticItemId: r.cosmeticItemId.toString(),
+          cosmeticItemId: cosmeticId,
           source: CosmeticSource.EVENT,
           durationDays: r.cosmeticDurationDays > 0 ? r.cosmeticDurationDays : null,
           externalRef: `${correlationId}:cosmetic:${i}`,
