@@ -8,6 +8,7 @@ export enum CounterScope {
   AGENCY = 'agency',
   RESELLER = 'reseller',
   FAMILY = 'family',
+  ROOM = 'room',
 }
 
 /**

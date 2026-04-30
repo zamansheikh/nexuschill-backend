@@ -107,6 +107,7 @@ export const PERMISSIONS = {
   MOMENTS_VIEW: 'moments.view',
   MOMENTS_MODERATE: 'moments.moderate',
 
+
   // Families
   FAMILY_VIEW: 'family.view',
   FAMILY_MANAGE: 'family.manage',

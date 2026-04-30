@@ -1,0 +1,803 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import * as bcrypt from 'bcrypt';
+import { Model, Types } from 'mongoose';
+
+import { AgoraService } from '../agora/agora.service';
+import { RtcRoleDto } from '../agora/dto/agora.dto';
+import { NumericIdService } from '../common/numeric-id.service';
+import { CounterScope } from '../common/schemas/counter.schema';
+import { User, UserDocument } from '../users/schemas/user.schema';
+import { CreateRoomDto, UpdateRoomSettingsDto } from './dto/room.dto';
+import {
+  RoomMember,
+  RoomMemberDocument,
+  RoomRole,
+} from './schemas/room-member.schema';
+import {
+  RoomSeat,
+  RoomSeatDocument,
+} from './schemas/room-seat.schema';
+import {
+  Room,
+  RoomDocument,
+  RoomKind,
+  RoomStatus,
+} from './schemas/room.schema';
+
+const PASSWORD_BCRYPT_ROUNDS = 10;
+
+/**
+ * Stable Agora channel name — `room:<numericId>` keeps the channel readable
+ * in logs and lets us re-derive it from a deeplink. We use numericId rather
+ * than the Mongo _id because Agora channels are 1..64 ASCII chars and the
+ * numericId is smaller + opaque to user mistypes.
+ */
+function channelNameFor(room: RoomDocument): string {
+  return `room:${room.numericId}`;
+}
+
+@Injectable()
+export class RoomsService {
+  private readonly logger = new Logger(RoomsService.name);
+
+  constructor(
+    @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
+    @InjectModel(RoomSeat.name)
+    private readonly seatModel: Model<RoomSeatDocument>,
+    @InjectModel(RoomMember.name)
+    private readonly memberModel: Model<RoomMemberDocument>,
+    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    private readonly numericIds: NumericIdService,
+    private readonly agora: AgoraService,
+  ) {}
+
+  // ============== Lifecycle ==============
+
+  /**
+   * First-time room creation. One audio room per user — calling twice
+   * returns the existing room rather than 409, so the client can call
+   * this on every "open Mine tab" without thinking.
+   */
+  async createOrGetOwn(
+    ownerId: string,
+    input: CreateRoomDto,
+  ): Promise<RoomDocument> {
+    if (!Types.ObjectId.isValid(ownerId)) {
+      throw new BadRequestException({ code: 'INVALID_USER_ID', message: 'Invalid user' });
+    }
+    const kind = input.kind ?? RoomKind.AUDIO;
+    const ownerOid = new Types.ObjectId(ownerId);
+
+    const existing = await this.roomModel
+      .findOne({ ownerId: ownerOid, kind })
+      .exec();
+    if (existing) {
+      if (existing.status === RoomStatus.REMOVED) {
+        throw new ForbiddenException({
+          code: 'ROOM_REMOVED',
+          message: 'This room was removed by an admin and cannot be reopened',
+        });
+      }
+      // Restore from CLOSED if owner is creating again. Avoids leaving the
+      // owner without a room after a self-close.
+      if (existing.status === RoomStatus.CLOSED) {
+        existing.status = RoomStatus.ACTIVE;
+        await existing.save();
+      }
+      return existing;
+    }
+
+    const owner = await this.userModel.findById(ownerOid).select('displayName username').exec();
+    if (!owner) throw new NotFoundException('Owner not found');
+    const name =
+      input.name?.trim() ||
+      owner.displayName?.trim() ||
+      owner.username?.trim() ||
+      'My Room';
+    const micCount = input.micCount ?? 8;
+
+    const room = await this.numericIds.createWithId(CounterScope.ROOM, (numericId) =>
+      this.roomModel.create({
+        ownerId: ownerOid,
+        kind,
+        numericId,
+        name,
+        announcement: input.announcement?.trim() ?? '',
+        micCount,
+        status: RoomStatus.ACTIVE,
+      }),
+    );
+
+    // Seed seats: index 0 = owner, 1..micCount = guest seats.
+    const seatDocs = [
+      { roomId: room._id, seatIndex: 0, locked: false, muted: false, userId: null },
+    ];
+    for (let i = 1; i <= micCount; i++) {
+      seatDocs.push({
+        roomId: room._id,
+        seatIndex: i,
+        locked: false,
+        muted: false,
+        userId: null,
+      });
+    }
+    await this.seatModel.insertMany(seatDocs);
+
+    return room;
+  }
+
+  /** GET /rooms/me — the caller's own room (audio for now). */
+  async getOwnRoom(ownerId: string, kind: RoomKind = RoomKind.AUDIO) {
+    if (!Types.ObjectId.isValid(ownerId)) return null;
+    const room = await this.roomModel
+      .findOne({ ownerId: new Types.ObjectId(ownerId), kind })
+      .exec();
+    if (!room || room.status === RoomStatus.REMOVED) return null;
+    return room;
+  }
+
+  /** Public read by id or numericId (the latter is what users type). */
+  async getOrThrow(idOrNumeric: string): Promise<RoomDocument> {
+    let room: RoomDocument | null = null;
+    if (Types.ObjectId.isValid(idOrNumeric)) {
+      room = await this.roomModel.findById(idOrNumeric).exec();
+    } else if (/^\d+$/.test(idOrNumeric)) {
+      room = await this.roomModel
+        .findOne({ numericId: parseInt(idOrNumeric, 10) })
+        .exec();
+    }
+    if (!room || room.status === RoomStatus.REMOVED) {
+      throw new NotFoundException({
+        code: 'ROOM_NOT_FOUND',
+        message: 'Room not found',
+      });
+    }
+    return room;
+  }
+
+  /** Returns the room hydrated with author + seats + members for the
+   *  in-room screen. One round-trip; mobile client can paint from this. */
+  async getSnapshot(roomId: string) {
+    const room = await this.getOrThrow(roomId);
+    const [seats, members, owner] = await Promise.all([
+      this.seatModel
+        .find({ roomId: room._id })
+        .sort({ seatIndex: 1 })
+        .populate('userId', 'username displayName avatarUrl numericId level isHost')
+        .exec(),
+      this.memberModel
+        .find({ roomId: room._id })
+        .sort({ joinedAt: 1 })
+        .populate('userId', 'username displayName avatarUrl numericId level isHost')
+        .exec(),
+      this.userModel
+        .findById(room.ownerId)
+        .select('username displayName avatarUrl numericId level isHost')
+        .exec(),
+    ]);
+    return {
+      room: room.toJSON(),
+      owner: owner?.toJSON() ?? null,
+      seats: seats.map((s) => s.toJSON()),
+      members: members.map((m) => m.toJSON()),
+      channelName: channelNameFor(room),
+    };
+  }
+
+  // ============== Settings (owner only) ==============
+
+  async updateSettings(
+    roomId: string,
+    ownerId: string,
+    input: UpdateRoomSettingsDto,
+  ): Promise<RoomDocument> {
+    const room = await this.assertOwner(roomId, ownerId);
+
+    if (input.name !== undefined) room.name = input.name.trim();
+    if (input.announcement !== undefined) {
+      room.announcement = input.announcement.trim();
+    }
+    if (input.micCount !== undefined && input.micCount !== room.micCount) {
+      await this.resizeSeats(room, input.micCount);
+      room.micCount = input.micCount;
+    }
+    if (input.password !== undefined) {
+      // Empty string = clear password; non-empty = hash + set.
+      room.passwordHash =
+        input.password.length === 0
+          ? ''
+          : await bcrypt.hash(input.password, PASSWORD_BCRYPT_ROUNDS);
+    }
+    if (input.themeCosmeticId !== undefined) {
+      // We only validate that it's a valid ObjectId here; ownership of the
+      // cosmetic is checked at the equip endpoint in CosmeticsService when
+      // the user equips it. Setting an unknown id just means the client
+      // can't render it — not a security issue.
+      if (input.themeCosmeticId.length === 0) {
+        room.themeCosmeticId = null;
+      } else if (Types.ObjectId.isValid(input.themeCosmeticId)) {
+        room.themeCosmeticId = new Types.ObjectId(input.themeCosmeticId);
+      } else {
+        throw new BadRequestException({
+          code: 'INVALID_COSMETIC_ID',
+          message: 'Invalid cosmetic id',
+        });
+      }
+    }
+    if (input.policies) {
+      if (input.policies.chat !== undefined) room.policies.chat = input.policies.chat;
+      if (input.policies.mic !== undefined) room.policies.mic = input.policies.mic;
+      if (input.policies.superMic !== undefined) {
+        room.policies.superMic = input.policies.superMic;
+      }
+    }
+    await room.save();
+    return room;
+  }
+
+  /** Add or remove guest seats when micCount changes. Never destroys an
+   *  occupied seat — bumps micCount up to keep it if needed. */
+  private async resizeSeats(room: RoomDocument, newCount: number) {
+    const current = await this.seatModel
+      .find({ roomId: room._id })
+      .sort({ seatIndex: 1 })
+      .exec();
+    const highestOccupied = current
+      .filter((s) => s.userId != null)
+      .reduce((max, s) => Math.max(max, s.seatIndex), 0);
+    const safeCount = Math.max(newCount, highestOccupied);
+
+    const existingMax = current.reduce((m, s) => Math.max(m, s.seatIndex), 0);
+    if (safeCount > existingMax) {
+      const docs = [];
+      for (let i = existingMax + 1; i <= safeCount; i++) {
+        docs.push({
+          roomId: room._id,
+          seatIndex: i,
+          locked: false,
+          muted: false,
+          userId: null,
+        });
+      }
+      await this.seatModel.insertMany(docs);
+    } else if (safeCount < existingMax) {
+      // Drop empty seats above the new ceiling.
+      await this.seatModel
+        .deleteMany({
+          roomId: room._id,
+          seatIndex: { $gt: safeCount },
+          userId: null,
+        })
+        .exec();
+    }
+  }
+
+  // ============== Enter / Leave (presence + token mint) ==============
+
+  /**
+   * Enter a room. Mints an Agora RTC token (subscriber by default — taking
+   * a seat is a separate call that re-mints with publisher role). Creates
+   * or refreshes the RoomMember presence row and bumps viewerCount.
+   */
+  async enter(roomId: string, userId: string, password?: string) {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException({ code: 'INVALID_USER_ID', message: 'Invalid user' });
+    }
+    const room = await this.getOrThrow(roomId);
+    if (room.status !== RoomStatus.ACTIVE) {
+      throw new ForbiddenException({
+        code: 'ROOM_INACTIVE',
+        message: 'Room is closed',
+      });
+    }
+    const userOid = new Types.ObjectId(userId);
+
+    if (room.blockedUserIds.some((b) => b.equals(userOid))) {
+      throw new ForbiddenException({
+        code: 'BLOCKED',
+        message: 'You are blocked from this room',
+      });
+    }
+
+    // Password gate. Owner + admins always bypass.
+    const isPrivileged =
+      room.ownerId.equals(userOid) ||
+      room.adminUserIds.some((a) => a.equals(userOid));
+    if (!isPrivileged) {
+      const hash = await this.roomModel
+        .findById(room._id)
+        .select('+passwordHash')
+        .lean()
+        .exec();
+      if (hash?.passwordHash && hash.passwordHash.length > 0) {
+        if (!password) {
+          throw new UnauthorizedException({
+            code: 'PASSWORD_REQUIRED',
+            message: 'This room requires a password',
+          });
+        }
+        const ok = await bcrypt.compare(password, hash.passwordHash);
+        if (!ok) {
+          throw new UnauthorizedException({
+            code: 'PASSWORD_INCORRECT',
+            message: 'Incorrect room password',
+          });
+        }
+      }
+    }
+
+    const role = this.roleFor(room, userOid);
+
+    // Upsert presence; only bump viewerCount on a true insert.
+    const existing = await this.memberModel
+      .findOne({ roomId: room._id, userId: userOid })
+      .exec();
+    if (existing) {
+      existing.lastSeenAt = new Date();
+      existing.role = role;
+      await existing.save();
+    } else {
+      await this.memberModel.create({
+        roomId: room._id,
+        userId: userOid,
+        role,
+        joinedAt: new Date(),
+        lastSeenAt: new Date(),
+      });
+      await this.roomModel
+        .updateOne(
+          { _id: room._id },
+          { $inc: { viewerCount: 1 }, $set: { liveAt: new Date() } },
+        )
+        .exec();
+    }
+
+    // Mint a subscriber token by default — sufficient to listen. Taking a
+    // seat re-mints with publisher role.
+    const token = await this.agora.generateRtcToken({
+      channelName: channelNameFor(room),
+      uid: this.uidForUser(userOid),
+      role: RtcRoleDto.SUBSCRIBER,
+    });
+
+    return {
+      ...(await this.getSnapshot(room._id.toString())),
+      myRole: role,
+      rtc: token,
+    };
+  }
+
+  async leave(roomId: string, userId: string): Promise<{ ok: boolean }> {
+    if (!Types.ObjectId.isValid(userId)) return { ok: true };
+    const room = await this.getOrThrow(roomId);
+    const userOid = new Types.ObjectId(userId);
+
+    const removed = await this.memberModel
+      .deleteOne({ roomId: room._id, userId: userOid })
+      .exec();
+    if (removed.deletedCount === 1) {
+      await this.roomModel
+        .updateOne(
+          { _id: room._id, viewerCount: { $gt: 0 } },
+          { $inc: { viewerCount: -1 } },
+        )
+        .exec();
+    }
+
+    // If the user held a seat, vacate it.
+    await this.seatModel
+      .updateMany(
+        { roomId: room._id, userId: userOid },
+        { $set: { userId: null, joinedAt: null, muted: false } },
+      )
+      .exec();
+
+    return { ok: true };
+  }
+
+  // ============== Seat actions ==============
+
+  /** Take a specific empty seat. Returns a fresh publisher RTC token. */
+  async takeSeat(roomId: string, userId: string, seatIndex: number) {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException({ code: 'INVALID_USER_ID', message: 'Invalid user' });
+    }
+    const room = await this.getOrThrow(roomId);
+    const userOid = new Types.ObjectId(userId);
+
+    if (room.blockedUserIds.some((b) => b.equals(userOid))) {
+      throw new ForbiddenException({ code: 'BLOCKED', message: 'You are blocked from this room' });
+    }
+
+    // Mic policy gate. Admins/owner always bypass.
+    const isPrivileged =
+      room.ownerId.equals(userOid) ||
+      room.adminUserIds.some((a) => a.equals(userOid));
+    if (!isPrivileged && room.policies.mic === 'admins') {
+      throw new ForbiddenException({
+        code: 'MIC_LOCKED_TO_ADMINS',
+        message: 'Only admins can take a seat in this room',
+      });
+    }
+
+    // The owner seat (index 0) is reserved.
+    if (seatIndex === 0 && !room.ownerId.equals(userOid)) {
+      throw new ForbiddenException({
+        code: 'OWNER_SEAT_RESERVED',
+        message: 'Only the owner can take the owner seat',
+      });
+    }
+
+    // Atomic claim: only flip if the seat is empty + unlocked. Conditional
+    // update prevents two users grabbing the same seat in a race.
+    const claim = await this.seatModel
+      .findOneAndUpdate(
+        {
+          roomId: room._id,
+          seatIndex,
+          userId: null,
+          locked: false,
+        },
+        {
+          $set: { userId: userOid, joinedAt: new Date(), muted: false },
+        },
+        { new: true },
+      )
+      .exec();
+    if (!claim) {
+      // Either taken, locked, or doesn't exist.
+      const exists = await this.seatModel
+        .findOne({ roomId: room._id, seatIndex })
+        .exec();
+      if (!exists) {
+        throw new NotFoundException({ code: 'SEAT_NOT_FOUND', message: 'Seat not found' });
+      }
+      if (exists.userId) {
+        throw new ConflictException({ code: 'SEAT_TAKEN', message: 'Seat already taken' });
+      }
+      throw new ForbiddenException({ code: 'SEAT_LOCKED', message: 'Seat is locked' });
+    }
+
+    // Vacate any other seat the user might be holding (shouldn't normally
+    // happen, but guards against ghosts after a crashed leave).
+    await this.seatModel
+      .updateMany(
+        {
+          roomId: room._id,
+          userId: userOid,
+          seatIndex: { $ne: seatIndex },
+        },
+        { $set: { userId: null, joinedAt: null, muted: false } },
+      )
+      .exec();
+
+    // Publisher RTC token so the client can start sending audio.
+    const token = await this.agora.generateRtcToken({
+      channelName: channelNameFor(room),
+      uid: this.uidForUser(userOid),
+      role: RtcRoleDto.PUBLISHER,
+    });
+    return { seat: claim.toJSON(), rtc: token };
+  }
+
+  async leaveSeat(roomId: string, userId: string, seatIndex: number) {
+    const room = await this.getOrThrow(roomId);
+    const userOid = new Types.ObjectId(userId);
+    const res = await this.seatModel
+      .findOneAndUpdate(
+        { roomId: room._id, seatIndex, userId: userOid },
+        { $set: { userId: null, joinedAt: null, muted: false } },
+        { new: true },
+      )
+      .exec();
+    if (!res) {
+      throw new ForbiddenException({
+        code: 'NOT_SEATED',
+        message: 'You are not on this seat',
+      });
+    }
+    // Remint subscriber token so the client drops publishing.
+    const token = await this.agora.generateRtcToken({
+      channelName: channelNameFor(room),
+      uid: this.uidForUser(userOid),
+      role: RtcRoleDto.SUBSCRIBER,
+    });
+    return { seat: res.toJSON(), rtc: token };
+  }
+
+  /** Owner/admin: lock or unlock a guest seat. Owner seat (0) is never locked. */
+  async setSeatLocked(
+    roomId: string,
+    actorId: string,
+    seatIndex: number,
+    locked: boolean,
+  ) {
+    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    if (seatIndex === 0) {
+      throw new BadRequestException({
+        code: 'CANNOT_LOCK_OWNER_SEAT',
+        message: 'The owner seat cannot be locked',
+      });
+    }
+    const seat = await this.seatModel
+      .findOneAndUpdate(
+        { roomId: room._id, seatIndex },
+        { $set: { locked } },
+        { new: true },
+      )
+      .exec();
+    if (!seat) {
+      throw new NotFoundException({ code: 'SEAT_NOT_FOUND', message: 'Seat not found' });
+    }
+    return { seat: seat.toJSON() };
+  }
+
+  /** Owner/admin: force-mute a seat. The user keeps the seat but stops
+   *  publishing audio (the realtime layer signals their client). */
+  async setSeatMuted(
+    roomId: string,
+    actorId: string,
+    seatIndex: number,
+    muted: boolean,
+  ) {
+    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    const seat = await this.seatModel
+      .findOneAndUpdate(
+        { roomId: room._id, seatIndex },
+        { $set: { muted } },
+        { new: true },
+      )
+      .exec();
+    if (!seat) {
+      throw new NotFoundException({ code: 'SEAT_NOT_FOUND', message: 'Seat not found' });
+    }
+    return { seat: seat.toJSON() };
+  }
+
+  /** Owner/admin removes a user from a seat without kicking them from the room. */
+  async kickFromSeat(roomId: string, actorId: string, seatIndex: number) {
+    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    if (seatIndex === 0) {
+      throw new BadRequestException({
+        code: 'CANNOT_KICK_OWNER_SEAT',
+        message: 'Owner seat cannot be vacated by an admin',
+      });
+    }
+    const seat = await this.seatModel
+      .findOneAndUpdate(
+        { roomId: room._id, seatIndex, userId: { $ne: null } },
+        { $set: { userId: null, joinedAt: null, muted: false } },
+        { new: true },
+      )
+      .exec();
+    if (!seat) {
+      throw new NotFoundException({
+        code: 'SEAT_EMPTY',
+        message: 'Seat is already empty',
+      });
+    }
+    return { seat: seat.toJSON() };
+  }
+
+  // ============== Admins / Block ==============
+
+  async promoteAdmin(roomId: string, ownerId: string, targetUserId: string) {
+    const room = await this.assertOwner(roomId, ownerId);
+    if (!Types.ObjectId.isValid(targetUserId)) {
+      throw new BadRequestException({ code: 'INVALID_USER_ID', message: 'Invalid user' });
+    }
+    const targetOid = new Types.ObjectId(targetUserId);
+    if (room.ownerId.equals(targetOid)) {
+      throw new BadRequestException({
+        code: 'OWNER_IS_NOT_ADMIN',
+        message: 'Owner is implicitly an admin',
+      });
+    }
+    if (!room.adminUserIds.some((a) => a.equals(targetOid))) {
+      room.adminUserIds.push(targetOid);
+      await room.save();
+    }
+    // Promote the live presence record too if they're currently here.
+    await this.memberModel
+      .updateOne(
+        { roomId: room._id, userId: targetOid },
+        { $set: { role: RoomRole.ADMIN } },
+      )
+      .exec();
+    return { ok: true };
+  }
+
+  async demoteAdmin(roomId: string, ownerId: string, targetUserId: string) {
+    const room = await this.assertOwner(roomId, ownerId);
+    if (!Types.ObjectId.isValid(targetUserId)) return { ok: true };
+    const targetOid = new Types.ObjectId(targetUserId);
+    room.adminUserIds = room.adminUserIds.filter((a) => !a.equals(targetOid));
+    await room.save();
+    await this.memberModel
+      .updateOne(
+        { roomId: room._id, userId: targetOid },
+        { $set: { role: RoomRole.MEMBER } },
+      )
+      .exec();
+    return { ok: true };
+  }
+
+  /**
+   * Hard-kick: removes the user from the room, vacates their seat, and adds
+   * them to blockedUserIds so they can't re-enter until unblocked.
+   */
+  async block(
+    roomId: string,
+    actorId: string,
+    targetUserId: string,
+    reason: string,
+  ) {
+    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    if (!Types.ObjectId.isValid(targetUserId)) {
+      throw new BadRequestException({ code: 'INVALID_USER_ID', message: 'Invalid user' });
+    }
+    const targetOid = new Types.ObjectId(targetUserId);
+    if (room.ownerId.equals(targetOid)) {
+      throw new BadRequestException({
+        code: 'CANNOT_BLOCK_OWNER',
+        message: 'Owner cannot be blocked from their own room',
+      });
+    }
+
+    if (!room.blockedUserIds.some((b) => b.equals(targetOid))) {
+      room.blockedUserIds.push(targetOid);
+    }
+    room.kickHistory.push({
+      userId: targetOid,
+      byUserId: new Types.ObjectId(actorId),
+      reason: reason ?? '',
+      at: new Date(),
+    });
+    await room.save();
+
+    // Drop their presence + seats.
+    await Promise.all([
+      this.memberModel.deleteOne({ roomId: room._id, userId: targetOid }).exec(),
+      this.seatModel
+        .updateMany(
+          { roomId: room._id, userId: targetOid },
+          { $set: { userId: null, joinedAt: null, muted: false } },
+        )
+        .exec(),
+      this.roomModel
+        .updateOne(
+          { _id: room._id, viewerCount: { $gt: 0 } },
+          { $inc: { viewerCount: -1 } },
+        )
+        .exec(),
+    ]);
+    return { ok: true };
+  }
+
+  async unblock(roomId: string, ownerId: string, targetUserId: string) {
+    const room = await this.assertOwner(roomId, ownerId);
+    if (!Types.ObjectId.isValid(targetUserId)) return { ok: true };
+    const targetOid = new Types.ObjectId(targetUserId);
+    room.blockedUserIds = room.blockedUserIds.filter((b) => !b.equals(targetOid));
+    await room.save();
+    return { ok: true };
+  }
+
+  async listBlocked(roomId: string, ownerId: string) {
+    const room = await this.assertOwner(roomId, ownerId);
+    const users = await this.userModel
+      .find({ _id: { $in: room.blockedUserIds } })
+      .select('username displayName avatarUrl numericId')
+      .exec();
+    return { items: users.map((u) => u.toJSON()) };
+  }
+
+  async listKickHistory(roomId: string, ownerId: string) {
+    const room = await this.assertOwner(roomId, ownerId);
+    // Hydrate the user refs in one round-trip so the admin UI gets names.
+    const ids = new Set<string>();
+    room.kickHistory.forEach((k) => {
+      ids.add(k.userId.toString());
+      ids.add(k.byUserId.toString());
+    });
+    const users = await this.userModel
+      .find({ _id: { $in: Array.from(ids) } })
+      .select('username displayName avatarUrl numericId')
+      .exec();
+    const byId = new Map(users.map((u) => [u._id.toString(), u.toJSON()]));
+    return {
+      items: room.kickHistory.map((k) => ({
+        user: byId.get(k.userId.toString()) ?? null,
+        by: byId.get(k.byUserId.toString()) ?? null,
+        reason: k.reason,
+        at: k.at,
+      })),
+    };
+  }
+
+  // ============== helpers ==============
+
+  /** Compute the current role of a user wrt a room. */
+  private roleFor(room: RoomDocument, userOid: Types.ObjectId): RoomRole {
+    if (room.ownerId.equals(userOid)) return RoomRole.OWNER;
+    if (room.adminUserIds.some((a) => a.equals(userOid))) return RoomRole.ADMIN;
+    return RoomRole.MEMBER;
+  }
+
+  /**
+   * Agora RTC requires a numeric uid. We derive a deterministic 31-bit
+   * integer from the user's ObjectId so the same user always gets the same
+   * uid in the channel — important for the realtime layer to map audio
+   * publishers back to user identities.
+   */
+  private uidForUser(userOid: Types.ObjectId): number {
+    const hex = userOid.toHexString();
+    // Take the last 8 hex chars (32 bits), mask the top bit so it fits in
+    // the positive int31 range Agora expects.
+    const last8 = hex.slice(-8);
+    return parseInt(last8, 16) & 0x7fffffff;
+  }
+
+  private async assertOwner(roomId: string, userId: string): Promise<RoomDocument> {
+    const room = await this.getOrThrow(roomId);
+    if (!Types.ObjectId.isValid(userId) || !room.ownerId.equals(new Types.ObjectId(userId))) {
+      throw new ForbiddenException({
+        code: 'NOT_OWNER',
+        message: 'Only the room owner can do this',
+      });
+    }
+    return room;
+  }
+
+  private async assertOwnerOrAdmin(
+    roomId: string,
+    userId: string,
+  ): Promise<RoomDocument> {
+    const room = await this.getOrThrow(roomId);
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new ForbiddenException({ code: 'NOT_AUTHORIZED', message: 'Not authorized' });
+    }
+    const oid = new Types.ObjectId(userId);
+    if (room.ownerId.equals(oid)) return room;
+    if (room.adminUserIds.some((a) => a.equals(oid))) return room;
+    throw new ForbiddenException({
+      code: 'NOT_AUTHORIZED',
+      message: 'Owner or admin only',
+    });
+  }
+
+  // ============== Admin moderation ==============
+
+  async adminRemove(roomId: string, reason: string, adminId?: string) {
+    const room = await this.getOrThrow(roomId);
+    room.status = RoomStatus.REMOVED;
+    room.removedReason = reason;
+    if (adminId && Types.ObjectId.isValid(adminId)) {
+      room.removedBy = new Types.ObjectId(adminId);
+    }
+    await room.save();
+    // Clear presence + seats so anyone currently inside drops cleanly.
+    await Promise.all([
+      this.memberModel.deleteMany({ roomId: room._id }).exec(),
+      this.seatModel
+        .updateMany(
+          { roomId: room._id, userId: { $ne: null } },
+          { $set: { userId: null, joinedAt: null, muted: false } },
+        )
+        .exec(),
+      this.roomModel
+        .updateOne({ _id: room._id }, { $set: { viewerCount: 0, liveAt: null } })
+        .exec(),
+    ]);
+    return room;
+  }
+}

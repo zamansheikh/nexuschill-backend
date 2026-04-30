@@ -1,0 +1,253 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
+import { Public } from '../../common/decorators/public.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import {
+  CreateRoomDto,
+  EnterRoomDto,
+  KickFromRoomDto,
+  UpdateRoomSettingsDto,
+} from './dto/room.dto';
+import { RoomKind } from './schemas/room.schema';
+import { RoomsService } from './rooms.service';
+
+/**
+ * User-facing room endpoints. All write operations require auth; reads of
+ * a public room snapshot are open so deeplinks (e.g. shared invite links)
+ * work without forcing a login first.
+ */
+@Controller({ path: 'rooms', version: '1' })
+export class RoomsController {
+  constructor(private readonly rooms: RoomsService) {}
+
+  // ---------- Lifecycle ----------
+
+  /**
+   * Create-or-get the caller's own room. Idempotent: calling on every
+   * "open Mine tab" is fine — returns the existing room if there is one.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post()
+  async createOrGet(
+    @CurrentUser() current: AuthenticatedUser,
+    @Body() dto: CreateRoomDto,
+  ) {
+    const room = await this.rooms.createOrGetOwn(current.userId, dto);
+    return { room: room.toJSON() };
+  }
+
+  /** GET /rooms/me — for the Mine tab. */
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  async myRoom(
+    @CurrentUser() current: AuthenticatedUser,
+    @Query('kind') kind?: RoomKind,
+  ) {
+    const room = await this.rooms.getOwnRoom(current.userId, kind);
+    return { room: room?.toJSON() ?? null };
+  }
+
+  /** Public snapshot — used to render the room intro card from a deeplink. */
+  @Public()
+  @Get(':id')
+  async snapshot(@Param('id') id: string) {
+    return this.rooms.getSnapshot(id);
+  }
+
+  // ---------- Settings ----------
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/settings')
+  async updateSettings(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateRoomSettingsDto,
+  ) {
+    const room = await this.rooms.updateSettings(id, current.userId, dto);
+    return { room: room.toJSON() };
+  }
+
+  // ---------- Enter / Leave ----------
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/enter')
+  async enter(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: EnterRoomDto,
+  ) {
+    return this.rooms.enter(id, current.userId, dto.password);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/leave')
+  async leave(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.rooms.leave(id, current.userId);
+  }
+
+  // ---------- Seats ----------
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/seats/:seatIndex/take')
+  async takeSeat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+  ) {
+    return this.rooms.takeSeat(id, current.userId, seatIndex);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/seats/:seatIndex/leave')
+  async leaveSeat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+  ) {
+    return this.rooms.leaveSeat(id, current.userId, seatIndex);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/seats/:seatIndex/lock')
+  async lockSeat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+  ) {
+    return this.rooms.setSeatLocked(id, current.userId, seatIndex, true);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/seats/:seatIndex/unlock')
+  async unlockSeat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+  ) {
+    return this.rooms.setSeatLocked(id, current.userId, seatIndex, false);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/seats/:seatIndex/mute')
+  async muteSeat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+  ) {
+    return this.rooms.setSeatMuted(id, current.userId, seatIndex, true);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/seats/:seatIndex/unmute')
+  async unmuteSeat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+  ) {
+    return this.rooms.setSeatMuted(id, current.userId, seatIndex, false);
+  }
+
+  /** Remove a member from a seat without kicking them from the room. */
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/seats/:seatIndex/kick')
+  async kickFromSeat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+  ) {
+    return this.rooms.kickFromSeat(id, current.userId, seatIndex);
+  }
+
+  // ---------- Admins ----------
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/admins/:userId')
+  async promoteAdmin(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+  ) {
+    return this.rooms.promoteAdmin(id, current.userId, userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/admins/:userId')
+  async demoteAdmin(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+  ) {
+    return this.rooms.demoteAdmin(id, current.userId, userId);
+  }
+
+  // ---------- Block / Kick ----------
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/block/:userId')
+  async block(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @Body() dto: KickFromRoomDto,
+  ) {
+    return this.rooms.block(id, current.userId, userId, dto.reason ?? '');
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/block/:userId')
+  async unblock(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+  ) {
+    return this.rooms.unblock(id, current.userId, userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/blocked')
+  async listBlocked(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.rooms.listBlocked(id, current.userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/kick-history')
+  async kickHistory(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.rooms.listKickHistory(id, current.userId);
+  }
+}
