@@ -88,6 +88,10 @@ export const PERMISSIONS = {
   COSMETICS_VIEW: 'cosmetics.view',
   COSMETICS_MANAGE: 'cosmetics.manage',
 
+  // Banners — home-screen carousel + custom splash banners.
+  BANNERS_VIEW: 'banners.view',
+  BANNERS_MANAGE: 'banners.manage',
+
   // Families
   FAMILY_VIEW: 'family.view',
   FAMILY_MANAGE: 'family.manage',
@@ -148,6 +152,7 @@ export const DEFAULT_ROLES = [
       'store.*',
       'vip.*',
       'cosmetics.*',
+      'banners.*',
       'family.*',
       'agency.*',
       'reseller.view',

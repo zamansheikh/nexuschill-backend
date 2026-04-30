@@ -12,6 +12,7 @@ import { RedisModule } from './redis/redis.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AgenciesModule } from './modules/agencies/agencies.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { BannersModule } from './modules/banners/banners.module';
 import { CommonModule } from './modules/common/common.module';
 import { CosmeticsModule } from './modules/cosmetics/cosmetics.module';
 import { GiftsModule } from './modules/gifts/gifts.module';
@@ -84,6 +85,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     CosmeticsModule,
     SvipModule,
     StoreModule,
+    BannersModule,
   ],
   controllers: [AppController],
   providers: [
