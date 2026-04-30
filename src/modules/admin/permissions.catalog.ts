@@ -92,6 +92,10 @@ export const PERMISSIONS = {
   BANNERS_VIEW: 'banners.view',
   BANNERS_MANAGE: 'banners.manage',
 
+  // Daily reward (7-day check-in cycle config).
+  DAILY_REWARD_VIEW: 'daily_reward.view',
+  DAILY_REWARD_MANAGE: 'daily_reward.manage',
+
   // Families
   FAMILY_VIEW: 'family.view',
   FAMILY_MANAGE: 'family.manage',
@@ -153,6 +157,7 @@ export const DEFAULT_ROLES = [
       'vip.*',
       'cosmetics.*',
       'banners.*',
+      'daily_reward.*',
       'family.*',
       'agency.*',
       'reseller.view',
