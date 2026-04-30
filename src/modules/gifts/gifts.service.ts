@@ -241,9 +241,10 @@ export class GiftsService {
     message?: string;
     idempotencyKey: string;
   }): Promise<{ event: GiftEventDocument; senderWallet: any }> {
-    if (input.senderId === input.receiverId) {
-      throw new BadRequestException({ code: 'SELF_GIFT', message: 'Cannot send a gift to yourself' });
-    }
+    // Self-gifting is allowed by design — users sometimes do it to
+    // convert coins to diamonds, trigger their own SVGA effect, or
+    // boost their own gift wall. The wallet transfer handles the
+    // sender == receiver case as a single user with offsetting txns.
     if (input.count <= 0) {
       throw new BadRequestException({ code: 'INVALID_COUNT', message: 'Count must be > 0' });
     }
@@ -351,9 +352,12 @@ export class GiftsService {
       input.contextId &&
       Types.ObjectId.isValid(input.contextId)
     ) {
-      const [sender, receiver] = await Promise.all([
+      const [sender, receiver, receiverRoomDiamonds] = await Promise.all([
         this.users.getByIdOrThrow(input.senderId).catch(() => null),
         this.users.getByIdOrThrow(input.receiverId).catch(() => null),
+        // Fresh per-receiver total in this room — mobile uses it to
+        // patch the seat diamond badge in place.
+        this.roomDiamondTotalFor(input.contextId, input.receiverId),
       ]);
       void this.realtime.emitToRoom(
         input.contextId,
@@ -373,6 +377,10 @@ export class GiftsService {
           count: input.count,
           totalCoinAmount,
           totalDiamondReward,
+          // The receiver's running total of diamonds earned in this
+          // room (sum of all completed gifts to them in this room).
+          // The client patches `seatDiamonds[receiverId]` from this.
+          receiverRoomDiamonds,
           sender: sender
             ? {
                 id: sender._id.toString(),
@@ -397,6 +405,60 @@ export class GiftsService {
 
     const wallet = await this.wallet.findByUserId(input.senderId);
     return { event, senderWallet: wallet };
+  }
+
+  // ============== Room aggregates ==============
+
+  /// Sum of `totalDiamondReward` per receiver for a single room. Drives
+  /// the "diamonds received in this room" badge under each seat. Returns
+  /// `{ [userId]: total }` — userIds are stringified ObjectIds so the
+  /// client can index by `seat.user.id` directly.
+  async roomDiamondTotals(roomId: string): Promise<Record<string, number>> {
+    if (!Types.ObjectId.isValid(roomId)) return {};
+    const rows = await this.eventModel.aggregate<{ _id: Types.ObjectId; total: number }>([
+      {
+        $match: {
+          contextType: GiftContext.ROOM,
+          contextId: new Types.ObjectId(roomId),
+          status: 'completed',
+        },
+      },
+      {
+        $group: {
+          _id: '$receiverId',
+          total: { $sum: '$totalDiamondReward' },
+        },
+      },
+    ]);
+    const out: Record<string, number> = {};
+    for (const row of rows) {
+      out[row._id.toString()] = row.total;
+    }
+    return out;
+  }
+
+  /// Same idea, but for one specific receiver. Used to compute the fresh
+  /// total to embed in `room.gift.sent` realtime events without doing a
+  /// full per-receiver groupBy on every send.
+  async roomDiamondTotalFor(
+    roomId: string,
+    receiverId: string,
+  ): Promise<number> {
+    if (!Types.ObjectId.isValid(roomId) || !Types.ObjectId.isValid(receiverId)) {
+      return 0;
+    }
+    const rows = await this.eventModel.aggregate<{ total: number }>([
+      {
+        $match: {
+          contextType: GiftContext.ROOM,
+          contextId: new Types.ObjectId(roomId),
+          receiverId: new Types.ObjectId(receiverId),
+          status: 'completed',
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$totalDiamondReward' } } },
+    ]);
+    return rows[0]?.total ?? 0;
   }
 
   // ============== Room transaction history ==============

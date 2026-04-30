@@ -230,9 +230,10 @@ export class WalletService {
     if (p.coinAmount <= 0 || p.diamondReward < 0) {
       throw new BadRequestException({ code: 'INVALID_AMOUNTS', message: 'Invalid amounts' });
     }
-    if (p.senderUserId === p.receiverUserId) {
-      throw new BadRequestException({ code: 'SELF_GIFT', message: 'Cannot gift yourself' });
-    }
+    // Self-gifting is allowed: caller is debited coins on the same
+    // wallet and credited diamonds on the same wallet inside one
+    // transaction. The two txn rows still record opposite directions,
+    // which keeps the audit trail clean.
 
     const existing = await this.txnModel.find({ correlationId: p.idempotencyKey }).exec();
     if (existing.length === 2) {

@@ -15,6 +15,7 @@ import { AgoraService } from '../agora/agora.service';
 import { RtcRoleDto } from '../agora/dto/agora.dto';
 import { NumericIdService } from '../common/numeric-id.service';
 import { CounterScope } from '../common/schemas/counter.schema';
+import { GiftsService } from '../gifts/gifts.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RealtimeEventType } from '../realtime/realtime.types';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -68,6 +69,7 @@ export class RoomsService {
     private readonly numericIds: NumericIdService,
     private readonly agora: AgoraService,
     private readonly realtime: RealtimeService,
+    private readonly gifts: GiftsService,
   ) {}
 
   // ============== Lifecycle ==============
@@ -178,7 +180,7 @@ export class RoomsService {
    *  in-room screen. One round-trip; mobile client can paint from this. */
   async getSnapshot(roomId: string) {
     const room = await this.getOrThrow(roomId);
-    const [seats, members, owner] = await Promise.all([
+    const [seats, members, owner, seatDiamonds] = await Promise.all([
       this.seatModel
         .find({ roomId: room._id })
         .sort({ seatIndex: 1 })
@@ -193,6 +195,11 @@ export class RoomsService {
         .findById(room.ownerId)
         .select('username displayName avatarUrl numericId level isHost')
         .exec(),
+      // Per-receiver diamond totals scoped to this room. Drives the
+      // diamond badge under each seated user. The realtime layer keeps
+      // these in sync as new gifts arrive (room.gift.sent payload
+      // includes the receiver's fresh total).
+      this.gifts.roomDiamondTotals(room._id.toString()),
     ]);
     return {
       room: room.toJSON(),
@@ -200,6 +207,7 @@ export class RoomsService {
       seats: seats.map((s) => s.toJSON()),
       members: members.map((m) => m.toJSON()),
       channelName: channelNameFor(room),
+      seatDiamonds,
     };
   }
 
