@@ -92,6 +92,10 @@ export const PERMISSIONS = {
   BANNERS_VIEW: 'banners.view',
   BANNERS_MANAGE: 'banners.manage',
 
+  // Push notifications — fan a custom notification + FCM push to
+  // all users / a specific user / a list of users.
+  NOTIFICATIONS_PUSH: 'notifications.push',
+
   // Daily reward (7-day check-in cycle config).
   DAILY_REWARD_VIEW: 'daily_reward.view',
   DAILY_REWARD_MANAGE: 'daily_reward.manage',

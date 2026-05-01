@@ -17,6 +17,7 @@ import { BannersModule } from './modules/banners/banners.module';
 import { CommonModule } from './modules/common/common.module';
 import { CosmeticsModule } from './modules/cosmetics/cosmetics.module';
 import { DailyRewardModule } from './modules/daily-reward/daily-reward.module';
+import { FcmModule } from './modules/fcm/fcm.module';
 import { GiftsModule } from './modules/gifts/gifts.module';
 import { MediaModule } from './modules/media/media.module';
 import { MessagesModule } from './modules/messages/messages.module';
@@ -99,6 +100,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     RealtimeModule,
     RoomsModule,
     MessagesModule,
+    FcmModule,
     NotificationsModule,
   ],
   controllers: [AppController],

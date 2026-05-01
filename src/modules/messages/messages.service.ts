@@ -178,12 +178,6 @@ export class MessagesService {
     const fromOid = new Types.ObjectId(fromUserId);
     const toOid = new Types.ObjectId(toUserId);
     const conversation = await this.findOrCreateConversation(fromOid, toOid);
-    // Track whether this is a brand-new thread *before* we mutate
-    // lastMessageAt below — used to decide whether to drop a row in
-    // the recipient's Notifications inbox. Subsequent messages in the
-    // thread don't need a notification (the chat-tab badge already
-    // signals new activity).
-    const isFirstMessage = conversation.lastMessageAt == null;
 
     const now = new Date();
     const created = await this.messageModel.create({
@@ -233,28 +227,28 @@ export class MessagesService {
       { message: messageView, conversation: fromConvoView },
     );
 
-    // Drop a row in the recipient's Notifications tab on first
-    // message only. Replies don't need a notification — the inbox
-    // badge already surfaces new activity.
-    if (isFirstMessage) {
-      const senderJson = (
-        await this.userModel.findById(fromOid).exec()
-      )?.toJSON() as Record<string, any> | null;
-      const senderLabel =
-        senderJson?.displayName ||
-        senderJson?.username ||
-        (senderJson?.numericId ? `User ${senderJson.numericId}` : 'Someone');
-      await this.notifications.create({
-        userId: toUserId,
-        actorId: fromUserId,
-        kind: NotificationKind.MESSAGE,
-        title: `${senderLabel} sent you a message`,
-        body: trimmed,
-        // Tap → opens the 1-1 thread for this peer.
-        linkKind: NotificationLinkKind.CHAT,
-        linkValue: fromUserId,
-      });
-    }
+    // Drop a notification on every new message. The Notifications tab
+    // is the user's "you have unread chats elsewhere in the app"
+    // surface — fan-in across conversations is the point. Aggregation
+    // (collapsing repeat senders) can land later as an inbox-side
+    // grouping; for now duplicates are fine and FCM-equivalent.
+    const senderJson = (
+      await this.userModel.findById(fromOid).exec()
+    )?.toJSON() as Record<string, any> | null;
+    const senderLabel =
+      senderJson?.displayName ||
+      senderJson?.username ||
+      (senderJson?.numericId ? `User ${senderJson.numericId}` : 'Someone');
+    await this.notifications.create({
+      userId: toUserId,
+      actorId: fromUserId,
+      kind: NotificationKind.MESSAGE,
+      title: `${senderLabel} sent you a message`,
+      body: trimmed,
+      // Tap → opens the 1-1 thread for this peer.
+      linkKind: NotificationLinkKind.CHAT,
+      linkValue: fromUserId,
+    });
 
     return { message: messageView, conversation: fromConvoView };
   }

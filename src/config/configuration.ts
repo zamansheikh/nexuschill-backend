@@ -92,7 +92,16 @@ export const configuration = () => ({
      * SDK access). Not required just for token verification — the SDK can
      * use Application Default Credentials or fetch Google's public keys
      * unauthenticated when only the project ID is set.
+     *
+     * REQUIRED for FCM push sends. Either this, FIREBASE_SERVICE_ACCOUNT_JSON,
+     * or GOOGLE_APPLICATION_CREDENTIALS must point at a real service account.
      */
     serviceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || '',
+    /**
+     * Inline service account JSON (string-form). Useful in containerized
+     * deploys (Render, Railway, etc.) that prefer secrets-as-env-vars over
+     * mounted files. Takes precedence over [serviceAccountPath].
+     */
+    serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '',
   },
 });

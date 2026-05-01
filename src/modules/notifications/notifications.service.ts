@@ -6,6 +6,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
+import { FcmService } from '../fcm/fcm.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RealtimeEventType } from '../realtime/realtime.types';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -63,6 +64,7 @@ export class NotificationsService {
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
     private readonly realtime: RealtimeService,
+    private readonly fcm: FcmService,
   ) {}
 
   // ============== Reads ==============
@@ -116,6 +118,26 @@ export class NotificationsService {
       RealtimeEventType.NOTIFICATION_RECEIVED,
       { notification: view },
     );
+    // Fan to FCM as well — covers backgrounded / killed apps where
+    // the realtime socket is closed. Fire-and-forget; FCM failures
+    // shouldn't fail the notification create. The mobile side
+    // de-dupes against the in-app realtime push by `id` in the data
+    // payload (same id as the persisted Notification).
+    void this.fcm
+      .sendToUser(params.userId, {
+        title: view.title,
+        body: view.body || '',
+        ...(view.imageUrl ? { imageUrl: view.imageUrl } : {}),
+        data: {
+          notificationId: view.id,
+          kind: view.kind,
+          linkKind: view.linkKind,
+          linkValue: view.linkValue,
+        },
+      })
+      .catch((e) =>
+        this.logger.warn(`FCM fan-out failed: ${(e as Error).message}`),
+      );
     return view;
   }
 
