@@ -17,6 +17,7 @@ import {
 import {
   MomentLike,
   MomentLikeDocument,
+  ReactionKind,
 } from './schemas/moment-like.schema';
 import {
   Moment,
@@ -112,31 +113,96 @@ export class MomentsService {
       this.momentModel.countDocuments(filter).exec(),
     ]);
 
-    // Annotate each row with `likedByMe` so the mobile heart icon paints
-    // the right state on first render. Single round-trip across the page.
-    let likedSet = new Set<string>();
-    if (viewerId && Types.ObjectId.isValid(viewerId) && items.length > 0) {
-      const likes = await this.likeModel
+    // Per-row annotations:
+    //   • `myReaction` — the kind the logged-in viewer picked, or null.
+    //     Drives which emoji the reaction button shows + whether to
+    //     treat the next tap as toggle-off.
+    //   • `reactionCounts` — { like: N, love: N, … } so the card can
+    //     render an emoji rollup ("👍❤️😂  124") without an extra round
+    //     trip per row.
+    //   • `likedByMe` — kept for backwards compat with older clients;
+    //     true iff `myReaction` is set to anything.
+    //
+    // Both annotations are computed in a single aggregation across
+    // the whole page so we don't N+1 the like collection.
+    const momentIds = items.map((m) => m._id);
+    const reactionsByMoment = new Map<string, Record<ReactionKind, number>>();
+    if (momentIds.length > 0) {
+      const counts = await this.likeModel
+        .aggregate<{
+          _id: { momentId: Types.ObjectId; kind: ReactionKind };
+          count: number;
+        }>([
+          { $match: { momentId: { $in: momentIds } } },
+          { $group: { _id: { momentId: '$momentId', kind: '$kind' }, count: { $sum: 1 } } },
+        ])
+        .exec();
+      for (const row of counts) {
+        const id = row._id.momentId.toString();
+        const bucket =
+          reactionsByMoment.get(id) ?? this.emptyReactionBucket();
+        // Tolerate legacy rows with missing `kind` — treat as `like`.
+        const kind = row._id.kind ?? ReactionKind.LIKE;
+        bucket[kind] = (bucket[kind] ?? 0) + row.count;
+        reactionsByMoment.set(id, bucket);
+      }
+    }
+
+    let myReactionByMoment = new Map<string, ReactionKind>();
+    if (viewerId && Types.ObjectId.isValid(viewerId) && momentIds.length > 0) {
+      const mine = await this.likeModel
         .find({
           userId: new Types.ObjectId(viewerId),
-          momentId: { $in: items.map((m) => m._id) },
+          momentId: { $in: momentIds },
         })
-        .select('momentId')
+        .select('momentId kind')
         .exec();
-      likedSet = new Set(likes.map((l) => l.momentId.toString()));
+      myReactionByMoment = new Map(
+        mine.map((l) => [l.momentId.toString(), l.kind ?? ReactionKind.LIKE]),
+      );
     }
+
     const annotated = items.map((m) => {
       const json = m.toJSON() as Record<string, unknown>;
-      json.likedByMe = likedSet.has(m._id.toString());
+      const id = m._id.toString();
+      const my = myReactionByMoment.get(id);
+      json.myReaction = my ?? null;
+      json.likedByMe = my != null;
+      json.reactionCounts =
+        reactionsByMoment.get(id) ?? this.emptyReactionBucket();
       return json;
     });
 
     return { items: annotated, page, limit, total };
   }
 
-  // ============== Likes ==============
+  /** Zeroed counter map. Used as the default for moments with no
+   *  reactions yet so the client sees a complete shape, not a
+   *  sometimes-empty object. */
+  private emptyReactionBucket(): Record<ReactionKind, number> {
+    return {
+      [ReactionKind.LIKE]: 0,
+      [ReactionKind.LOVE]: 0,
+      [ReactionKind.HAHA]: 0,
+      [ReactionKind.WOW]: 0,
+      [ReactionKind.SAD]: 0,
+      [ReactionKind.ANGRY]: 0,
+    };
+  }
 
-  async like(momentId: string, userId: string): Promise<{ likeCount: number }> {
+  // ============== Reactions ==============
+
+  /**
+   * Set or update the viewer's reaction on a moment. Upsert semantics
+   * — a user switching from `like` → `love` updates the same row, so
+   * the `likeCount` (now treated as "total reactions") only bumps on
+   * the FIRST reaction this user adds, not on each kind change.
+   */
+  async react(
+    momentId: string,
+    userId: string,
+    kind: ReactionKind,
+  ): Promise<{ likeCount: number; myReaction: ReactionKind }> {
     if (!Types.ObjectId.isValid(momentId) || !Types.ObjectId.isValid(userId)) {
       throw new BadRequestException({ code: 'INVALID_ID', message: 'Invalid id' });
     }
@@ -144,31 +210,38 @@ export class MomentsService {
     if (moment.status !== MomentStatus.ACTIVE) {
       throw new BadRequestException({
         code: 'MOMENT_INACTIVE',
-        message: 'Cannot like an inactive moment',
+        message: 'Cannot react to an inactive moment',
       });
     }
 
-    // Insert idempotently. Duplicate-key (E11000) means already liked → no-op.
-    let inserted = false;
-    try {
-      await this.likeModel.create({
-        momentId: new Types.ObjectId(momentId),
-        userId: new Types.ObjectId(userId),
-      });
-      inserted = true;
-    } catch (err: any) {
-      if (err?.code !== 11000) throw err;
-    }
-
-    if (inserted) {
+    const wasNew = await this.upsertReaction(
+      moment._id.toString(),
+      userId,
+      kind,
+    );
+    if (wasNew) {
       await this.momentModel
         .updateOne({ _id: moment._id }, { $inc: { likeCount: 1 } })
         .exec();
     }
-    const fresh = await this.momentModel.findById(moment._id).select('likeCount').exec();
-    return { likeCount: fresh?.likeCount ?? moment.likeCount };
+    const fresh = await this.momentModel
+      .findById(moment._id)
+      .select('likeCount')
+      .exec();
+    return {
+      likeCount: fresh?.likeCount ?? moment.likeCount,
+      myReaction: kind,
+    };
   }
 
+  /** Backwards-compatible alias — old clients call `like()` without a
+   *  reaction kind. Falls through to `react()` with kind=`like`. */
+  async like(momentId: string, userId: string): Promise<{ likeCount: number }> {
+    const r = await this.react(momentId, userId, ReactionKind.LIKE);
+    return { likeCount: r.likeCount };
+  }
+
+  /** Clears the viewer's reaction on a moment, if any. */
   async unlike(momentId: string, userId: string): Promise<{ likeCount: number }> {
     if (!Types.ObjectId.isValid(momentId) || !Types.ObjectId.isValid(userId)) {
       throw new BadRequestException({ code: 'INVALID_ID', message: 'Invalid id' });
@@ -188,8 +261,34 @@ export class MomentsService {
         )
         .exec();
     }
-    const fresh = await this.momentModel.findById(moment._id).select('likeCount').exec();
+    const fresh = await this.momentModel
+      .findById(moment._id)
+      .select('likeCount')
+      .exec();
     return { likeCount: fresh?.likeCount ?? moment.likeCount };
+  }
+
+  /** Internal upsert helper. Returns true iff a brand-new reaction
+   *  row was created (so the caller can bump `likeCount`). False
+   *  means the user already had a reaction; only `kind` changed. */
+  private async upsertReaction(
+    momentId: string,
+    userId: string,
+    kind: ReactionKind,
+  ): Promise<boolean> {
+    const result = await this.likeModel
+      .updateOne(
+        {
+          momentId: new Types.ObjectId(momentId),
+          userId: new Types.ObjectId(userId),
+        },
+        { $set: { kind } },
+        { upsert: true },
+      )
+      .exec();
+    // `upsertedCount === 1` on insert; `matchedCount === 1` on
+    // update of an existing row.
+    return result.upsertedCount === 1;
   }
 
   // ============== Admin moderation ==============

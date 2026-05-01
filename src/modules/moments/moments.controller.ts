@@ -18,9 +18,11 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { MediaService } from '../media/media.service';
-import { CreateCommentDto, CreateMomentDto } from './dto/moment.dto';
+import { CreateCommentDto, CreateMomentDto, ReactDto } from './dto/moment.dto';
 import { MomentsService } from './moments.service';
+import { ReactionKind } from './schemas/moment-like.schema';
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB / image
 const MAX_IMAGES = 9;
@@ -36,17 +38,22 @@ export class MomentsController {
   // ---------- Read ----------
 
   /**
-   * Public feed. Auth is optional — when present, each item is annotated
-   * with `likedByMe` so the heart paints correctly on first render.
+   * Public feed. Anonymous reads are allowed, but a logged-in viewer
+   * gets per-row `likedByMe` / `myReaction` annotations. The combo of
+   * `@Public()` + [OptionalJwtAuthGuard] is the trick: the first
+   * tells the GLOBAL [JwtAuthGuard] to skip; the second runs the
+   * passport strategy locally without throwing on missing/invalid
+   * tokens. Without this, `@CurrentUser()` reads `undefined` even
+   * when a valid JWT is in the header — the original bug behind
+   * "my likes disappear after refresh."
    */
   @Public()
+  @UseGuards(OptionalJwtAuthGuard)
   @Get()
   async feed(
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('authorId') authorId?: string,
-    // The auth guard isn't applied, but if a JWT is present the request
-    // pipeline still parses it via the global decorator. We accept null.
     @CurrentUser() current?: AuthenticatedUser,
   ) {
     return this.moments.listFeed(current?.userId ?? null, { page, limit, authorId });
@@ -125,7 +132,37 @@ export class MomentsController {
     return { ok: true };
   }
 
-  // ---------- Likes ----------
+  // ---------- Reactions ----------
+
+  /**
+   * Set the viewer's reaction on a moment. Body: `{ kind }` where
+   * `kind` is one of the [ReactionKind] enum values (like, love,
+   * haha, wow, sad, angry). Idempotent — sending the same kind again
+   * is a no-op; sending a different kind switches the reaction.
+   */
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/react')
+  async react(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ReactDto,
+  ) {
+    return this.moments.react(id, current.userId, dto.kind as ReactionKind);
+  }
+
+  /** Clear the viewer's reaction. Same effect as the legacy
+   *  DELETE /:id/like, kept under both routes for clarity. */
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/react')
+  async unreact(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.moments.unlike(id, current.userId);
+  }
+
+  // ---------- Legacy like endpoints (back-compat with old clients) ----------
 
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)

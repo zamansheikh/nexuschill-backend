@@ -66,3 +66,11 @@ export class CreateCommentDto {
   @MaxLength(40)
   parentId?: string;
 }
+
+export class ReactDto {
+  /// Reaction kind. The string vocabulary matches the [ReactionKind]
+  /// enum on the schema; we don't import the enum here to keep DTO
+  /// validation independent of the persistence layer.
+  @IsEnum(['like', 'love', 'haha', 'wow', 'sad', 'angry'])
+  kind!: 'like' | 'love' | 'haha' | 'wow' | 'sad' | 'angry';
+}
