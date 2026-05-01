@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
+import { NotificationsModule } from '../notifications/notifications.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { MessagesController } from './messages.controller';
@@ -22,6 +23,11 @@ import { Message, MessageSchema } from './schemas/message.schema';
       { name: User.name, schema: UserSchema },
     ]),
     RealtimeModule,
+    // Drop a notification on the recipient when a brand-new
+    // conversation begins, so the Notifications tab reflects DM
+    // activity. (We don't notify on every reply — that would just
+    // duplicate the inbox badge.)
+    NotificationsModule,
   ],
   controllers: [MessagesController],
   providers: [MessagesService],

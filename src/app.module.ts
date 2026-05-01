@@ -21,6 +21,7 @@ import { GiftsModule } from './modules/gifts/gifts.module';
 import { MediaModule } from './modules/media/media.module';
 import { MessagesModule } from './modules/messages/messages.module';
 import { MomentsModule } from './modules/moments/moments.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
@@ -98,6 +99,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     RealtimeModule,
     RoomsModule,
     MessagesModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [

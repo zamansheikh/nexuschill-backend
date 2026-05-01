@@ -7,6 +7,11 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
+import { NotificationsService } from '../notifications/notifications.service';
+import {
+  NotificationKind,
+  NotificationLinkKind,
+} from '../notifications/schemas/notification.schema';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RealtimeEventType } from '../realtime/realtime.types';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -76,6 +81,7 @@ export class MessagesService {
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
     private readonly realtime: RealtimeService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ============== Read paths ==============
@@ -172,6 +178,12 @@ export class MessagesService {
     const fromOid = new Types.ObjectId(fromUserId);
     const toOid = new Types.ObjectId(toUserId);
     const conversation = await this.findOrCreateConversation(fromOid, toOid);
+    // Track whether this is a brand-new thread *before* we mutate
+    // lastMessageAt below — used to decide whether to drop a row in
+    // the recipient's Notifications inbox. Subsequent messages in the
+    // thread don't need a notification (the chat-tab badge already
+    // signals new activity).
+    const isFirstMessage = conversation.lastMessageAt == null;
 
     const now = new Date();
     const created = await this.messageModel.create({
@@ -220,6 +232,29 @@ export class MessagesService {
       RealtimeEventType.MESSAGE_RECEIVED,
       { message: messageView, conversation: fromConvoView },
     );
+
+    // Drop a row in the recipient's Notifications tab on first
+    // message only. Replies don't need a notification — the inbox
+    // badge already surfaces new activity.
+    if (isFirstMessage) {
+      const senderJson = (
+        await this.userModel.findById(fromOid).exec()
+      )?.toJSON() as Record<string, any> | null;
+      const senderLabel =
+        senderJson?.displayName ||
+        senderJson?.username ||
+        (senderJson?.numericId ? `User ${senderJson.numericId}` : 'Someone');
+      await this.notifications.create({
+        userId: toUserId,
+        actorId: fromUserId,
+        kind: NotificationKind.MESSAGE,
+        title: `${senderLabel} sent you a message`,
+        body: trimmed,
+        // Tap → opens the 1-1 thread for this peer.
+        linkKind: NotificationLinkKind.CHAT,
+        linkValue: fromUserId,
+      });
+    }
 
     return { message: messageView, conversation: fromConvoView };
   }

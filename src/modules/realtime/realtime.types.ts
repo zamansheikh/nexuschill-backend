@@ -59,6 +59,15 @@ export enum RealtimeEventType {
   /** This user marked a conversation read on some device — the others
    *  should clear the badge locally. Payload: `{ conversationId }`. */
   MESSAGE_READ = 'message.read',
+
+  /** A new notification landed in this user's inbox. Sent only to the
+   *  recipient's `user:<id>` scope. Payload: `{ notification }`. */
+  NOTIFICATION_RECEIVED = 'notification.received',
+
+  /** This user marked one (or all) notifications read on some device.
+   *  Payload: `{ id }` where `id` is a notification id or the literal
+   *  string `"all"` for mark-all-read. */
+  NOTIFICATION_READ = 'notification.read',
 }
 
 export interface RealtimeEvent<TPayload = unknown> {
