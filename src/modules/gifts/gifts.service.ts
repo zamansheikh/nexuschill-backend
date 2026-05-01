@@ -212,7 +212,34 @@ export class GiftsService {
         details: { totalSent: gift.totalSent },
       });
     }
-    // Best-effort Cloudinary cleanup — don't block the deletion if it fails.
+    await this.cleanupAssets(gift);
+    await this.giftModel.deleteOne({ _id: gift._id }).exec();
+  }
+
+  /// Cascade-delete a gift along with every GiftEvent that references it.
+  /// This is destructive — sender/receiver gift history for this gift
+  /// disappears, and any room/leaderboard aggregations that read from
+  /// GiftEvent will recompute as if those sends never happened. The
+  /// loose `Transaction` ledger entries (refType='gift', refId=...) are
+  /// left untouched intentionally so financial audit trails survive.
+  ///
+  /// Only call from the admin panel's "force delete" path. Most retirements
+  /// should use `softDelete` (deactivate) which preserves history.
+  async forcePurge(id: string): Promise<{ deletedEvents: number }> {
+    const gift = await this.getByIdOrThrow(id);
+    const giftObjectId = gift._id;
+    const eventsResult = await this.eventModel
+      .deleteMany({ giftId: giftObjectId })
+      .exec();
+    await this.cleanupAssets(gift);
+    await this.giftModel.deleteOne({ _id: giftObjectId }).exec();
+    return { deletedEvents: eventsResult.deletedCount ?? 0 };
+  }
+
+  /// Best-effort Cloudinary cleanup shared by purge() and forcePurge().
+  /// Failures don't block the deletion — orphan assets in Cloudinary are
+  /// tolerable; orphan rows in our DB are not.
+  private async cleanupAssets(gift: GiftDocument): Promise<void> {
     if (gift.thumbnailPublicId) {
       this.media
         .deleteImage(gift.thumbnailPublicId)
@@ -226,7 +253,6 @@ export class GiftsService {
         .deleteAsset(gift.animationPublicId, resourceType)
         .catch(() => undefined);
     }
-    await this.giftModel.deleteOne({ _id: gift._id }).exec();
   }
 
   // ============== Send gift (user-facing) ==============

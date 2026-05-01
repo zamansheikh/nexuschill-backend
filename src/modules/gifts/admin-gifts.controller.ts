@@ -95,12 +95,27 @@ export class AdminGiftsController {
 
   /// Permanently delete a gift. Server enforces `totalSent === 0` —
   /// returns 409 if anyone has ever sent the gift, in which case the
-  /// admin should deactivate (`DELETE /:id`) instead.
+  /// admin should deactivate (`DELETE /:id`) or force-delete
+  /// (`DELETE /:id/force`) instead.
   @RequirePermissions(PERMISSIONS.GIFTS_MANAGE)
   @Delete(':id/purge')
   async purge(@Param('id') id: string) {
     await this.gifts.purge(id);
     return { success: true };
+  }
+
+  /// Cascade-delete a gift AND every GiftEvent that references it.
+  /// Use only when the admin explicitly wants to erase the gift from
+  /// history (regulatory takedown, mistaken catalog entry that's been
+  /// sent in error). The loose Transaction ledger entries are left
+  /// intact so the financial audit trail survives. Returns the number
+  /// of GiftEvent rows removed so the admin UI can show "X events also
+  /// deleted" for confirmation.
+  @RequirePermissions(PERMISSIONS.GIFTS_MANAGE)
+  @Delete(':id/force')
+  async forcePurge(@Param('id') id: string) {
+    const { deletedEvents } = await this.gifts.forcePurge(id);
+    return { success: true, deletedEvents };
   }
 
   // ---------- Asset uploads ----------
