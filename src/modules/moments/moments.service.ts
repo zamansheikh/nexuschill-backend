@@ -58,12 +58,22 @@ export class MomentsService {
         message: 'Moment must have text or at least one image',
       });
     }
-    return this.momentModel.create({
+    const created = await this.momentModel.create({
       authorId: new Types.ObjectId(authorId),
       text,
       media,
       status: MomentStatus.ACTIVE,
     });
+    // Re-fetch with author populated so the mobile feed card can
+    // render avatar + display name immediately after the optimistic
+    // insert. Without this, the response has `authorId` as a bare
+    // ObjectId string and the card falls back to "User · just now"
+    // until the next feed refresh.
+    const populated = await this.momentModel
+      .findById(created._id)
+      .populate('authorId', 'username displayName avatarUrl numericId level isHost')
+      .exec();
+    return populated ?? created;
   }
 
   /** Author or admin can delete; users can only delete their own. */
