@@ -799,6 +799,102 @@ export class RoomsService {
     return { seat: seat.toJSON() };
   }
 
+  /// Owner/admin invites a user to a specific seat. The seat must be
+  /// empty + unlocked, and the target must be present in the room
+  /// (RoomMember). We don't reserve the seat here — the invitee accepts
+  /// by calling `takeSeat` like any other user; the realtime event is
+  /// purely a UI prompt. Mic policy still applies to the take, so
+  /// "admins-only" rooms can't have non-admin invitees take a seat.
+  ///
+  /// The event is broadcast to the whole room scope; receivers filter
+  /// by `targetUserId === my id` to decide whether to show the prompt.
+  async inviteToSeat(
+    roomId: string,
+    actorId: string,
+    seatIndex: number,
+    targetUserId: string,
+  ) {
+    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    if (!Types.ObjectId.isValid(targetUserId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user',
+      });
+    }
+    if (seatIndex === 0) {
+      throw new BadRequestException({
+        code: 'CANNOT_INVITE_TO_OWNER_SEAT',
+        message: 'Owner seat cannot be invited',
+      });
+    }
+    const targetOid = new Types.ObjectId(targetUserId);
+    if (room.ownerId.equals(targetOid)) {
+      throw new BadRequestException({
+        code: 'OWNER_NEEDS_NO_INVITE',
+        message: 'Owner does not need an invite',
+      });
+    }
+
+    const seat = await this.seatModel
+      .findOne({ roomId: room._id, seatIndex })
+      .exec();
+    if (!seat) {
+      throw new NotFoundException({
+        code: 'SEAT_NOT_FOUND',
+        message: 'Seat not found',
+      });
+    }
+    if (seat.userId) {
+      throw new ConflictException({
+        code: 'SEAT_TAKEN',
+        message: 'Seat is already taken',
+      });
+    }
+    if (seat.locked) {
+      throw new ForbiddenException({
+        code: 'SEAT_LOCKED',
+        message: 'Seat is locked — unlock it before inviting',
+      });
+    }
+
+    // The invitee should be in the room (as a viewer) for the prompt
+    // to mean anything. If they're not present, surface a clear error
+    // so the picker can grey them out.
+    const isPresent = await this.memberModel
+      .exists({ roomId: room._id, userId: targetOid })
+      .exec();
+    if (!isPresent) {
+      throw new BadRequestException({
+        code: 'TARGET_NOT_IN_ROOM',
+        message: 'User is not currently in this room',
+      });
+    }
+
+    const [inviter, target] = await Promise.all([
+      this.userModel
+        .findById(actorId)
+        .select('username displayName avatarUrl numericId')
+        .exec(),
+      this.userModel
+        .findById(targetOid)
+        .select('username displayName avatarUrl numericId')
+        .exec(),
+    ]);
+
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.SEAT_INVITED,
+      {
+        targetUserId: targetUserId,
+        seatIndex,
+        inviter: inviter?.toJSON() ?? null,
+        target: target?.toJSON() ?? null,
+      },
+    );
+
+    return { ok: true };
+  }
+
   // ============== Admins / Block ==============
 
   async promoteAdmin(roomId: string, ownerId: string, targetUserId: string) {

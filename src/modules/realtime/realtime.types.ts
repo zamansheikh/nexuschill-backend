@@ -34,6 +34,11 @@ export enum RealtimeEventType {
   /** Gift sent in this room — drives the SVGA overlay + banner. */
   ROOM_GIFT_SENT = 'room.gift.sent',
 
+  /** Host or admin invited a user to a specific seat. The payload
+   *  carries the target userId; receivers filter client-side and only
+   *  the target shows the accept/reject prompt. */
+  SEAT_INVITED = 'seat.invited',
+
   /** A rocket has filled in this room and is launching now. */
   ROOM_ROCKET_LAUNCH = 'room.rocket.launch',
 

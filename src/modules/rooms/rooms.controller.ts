@@ -205,6 +205,21 @@ export class RoomsController {
     return this.rooms.kickFromSeat(id, current.userId, seatIndex);
   }
 
+  /// Owner/admin invites a user to a specific seat. Server emits a
+  /// `seat.invited` event scoped to the room — only the target's
+  /// client surfaces the accept/reject prompt (filter is client-side).
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/seats/:seatIndex/invite/:userId')
+  async inviteToSeat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+    @Param('userId') userId: string,
+  ) {
+    return this.rooms.inviteToSeat(id, current.userId, seatIndex, userId);
+  }
+
   // ---------- Admins ----------
 
   @UseGuards(JwtAuthGuard)
