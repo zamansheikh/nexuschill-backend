@@ -142,7 +142,16 @@ export class FcmService implements OnModuleInit {
    *  (rejected by FCM) are removed lazily. */
   async sendToUser(userId: string, payload: PushPayload): Promise<number> {
     if (!Types.ObjectId.isValid(userId)) return 0;
-    if (!this.app) return 0;
+    if (!this.app) {
+      // Single warn, only when actually attempting a send. Boot-time
+      // already logged the misconfiguration; this surfaces it again
+      // at the moment a notification is being skipped because of it.
+      this.logger.warn(
+        `FCM disabled — sendToUser(${userId}) skipped. ` +
+          `Set FIREBASE_SERVICE_ACCOUNT_PATH/JSON to enable.`,
+      );
+      return 0;
+    }
     const tokens = await this.tokenModel
       .find({ userId: new Types.ObjectId(userId) })
       .select('token')
@@ -229,6 +238,16 @@ export class FcmService implements OnModuleInit {
           },
         });
         delivered += response.successCount;
+        // Only log when at least one delivery failed AND none
+        // succeeded — partial failures are usually just stale
+        // tokens (handled by the sweep below). All-failed batches
+        // typically signal a misconfiguration worth surfacing.
+        if (response.successCount === 0 && response.failureCount > 0) {
+          const code = response.responses.find((r) => !r.success)?.error?.code;
+          this.logger.warn(
+            `FCM batch all-failed (${response.failureCount}); first error: ${code ?? 'unknown'}`,
+          );
+        }
         // Sweep invalidated tokens. FCM tells us which ones via
         // per-response error codes — anything UNREGISTERED or
         // INVALID_ARGUMENT means "throw it away".

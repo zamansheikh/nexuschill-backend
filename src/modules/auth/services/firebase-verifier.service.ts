@@ -28,14 +28,66 @@ export class FirebaseVerifierService implements OnModuleInit {
       return;
     }
 
+    // Load service-account credentials if available — same env vars as
+    // FcmService. Critical: this service initializes Firebase Admin
+    // first, so if we don't apply credentials here, FcmService later
+    // sees an existing app (without creds) and reuses it. Result:
+    // FCM sends silently no-op even when the service account env var
+    // is set. Loading creds here means the SAME app handle is shared
+    // across token verification AND FCM messaging.
+    const serviceAccountJson = this.config.get<string>(
+      'firebase.serviceAccountJson',
+    );
+    const serviceAccountPath = this.config.get<string>(
+      'firebase.serviceAccountPath',
+    );
+
+    // Reuse an existing app if one is already initialized.
+    if (admin.apps.length) {
+      this.app = admin.apps[0]!;
+      this.logger.log(
+        `Firebase Admin reusing existing app for project "${projectId}"`,
+      );
+      return;
+    }
+
+    // Try to load service-account credentials. ANY failure here
+    // (file missing, bad JSON, wrong path) is non-fatal — we fall
+    // back to projectId-only init so Google sign-in keeps working.
+    // FCM sends will silently no-op until the operator fixes the
+    // credential path; that's better than breaking auth.
+    let credential: admin.credential.Credential | undefined;
     try {
-      // If an app is already initialized (e.g. from another import), reuse it.
-      this.app = admin.apps.length
-        ? admin.apps[0]!
-        : admin.initializeApp({ projectId });
-      this.logger.log(`Firebase Admin initialized for project "${projectId}"`);
+      if (serviceAccountJson) {
+        credential = admin.credential.cert(JSON.parse(serviceAccountJson));
+      } else if (serviceAccountPath) {
+        credential = admin.credential.cert(serviceAccountPath);
+      } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        credential = admin.credential.applicationDefault();
+      }
     } catch (e) {
-      this.logger.error(`Firebase Admin init failed: ${(e as Error).message}`);
+      this.logger.warn(
+        `Failed to load Firebase service-account (FCM will be disabled): ${(e as Error).message}. ` +
+          `Path tried: "${serviceAccountPath || '(none)'}". ` +
+          `Continuing with projectId-only init.`,
+      );
+      credential = undefined;
+    }
+
+    try {
+      this.app = admin.initializeApp({
+        projectId,
+        ...(credential ? { credential } : {}),
+      });
+      this.logger.log(
+        credential
+          ? `Firebase Admin initialized for project "${projectId}" (with credentials — FCM enabled)`
+          : `Firebase Admin initialized for project "${projectId}" (no credentials — FCM disabled, verification only)`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `Firebase Admin init failed: ${(e as Error).message}`,
+      );
     }
   }
 

@@ -40,6 +40,14 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 
+# Local secrets directory — Firebase service-account JSON,
+# any future API credentials, etc. Anything here is mounted into
+# the container at runtime and must NEVER be committed.
+# `*` + negated `.md` lets us ship docs (README explaining what
+# files go here) while keeping the actual secrets out.
+secrets/*
+!secrets/*.md
+
 # temp directories
 .tmp
 .temp

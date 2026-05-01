@@ -26,6 +26,16 @@ services:
     environment:
       # Inside the compose network, reach Redis by service name
       REDIS_HOST: redis
+      # Override the .env path with the in-container mount target.
+      # The host file lives at the repo root and is gitignored —
+      # see the volume mount below. The JSON env var is left empty
+      # so the path-based loader takes precedence.
+      FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
+    volumes:
+      # Mount the Firebase service-account JSON read-only at a
+      # known path inside the container. Host file lives in
+      # backend/secrets/ which is gitignored — never commit creds.
+      - ./secrets/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
     ports:
       - '3000:3000'
     depends_on:
