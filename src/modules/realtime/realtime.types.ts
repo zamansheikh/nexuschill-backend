@@ -48,6 +48,17 @@ export enum RealtimeEventType {
 
   /** Free-form announcement banner from admin. */
   GLOBAL_ANNOUNCEMENT = 'global.announcement',
+
+  // ---------- User-scoped (1-1 messaging) ----------
+  /** A 1-1 message landed for this user. Sent to BOTH participants on
+   *  their respective `user:<id>` scopes — the recipient updates their
+   *  inbox + thread, the sender's other devices stay in sync. Payload:
+   *  `{ message, conversation }`. */
+  MESSAGE_RECEIVED = 'message.received',
+
+  /** This user marked a conversation read on some device — the others
+   *  should clear the badge locally. Payload: `{ conversationId }`. */
+  MESSAGE_READ = 'message.read',
 }
 
 export interface RealtimeEvent<TPayload = unknown> {

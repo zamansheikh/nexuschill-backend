@@ -74,6 +74,12 @@ export class RealtimeGateway
       // subscribe step.
       await socket.join('global');
 
+      // Auto-join the user's personal scope `user:<id>` — drives 1-1
+      // message delivery, read receipts, and any future per-user
+      // notification stream. The room name is derived from the JWT
+      // sub claim, so spoofing is gated by the JWT verification above.
+      await socket.join(`user:${payload.sub}`);
+
       this.logger.debug(`Connected: user=${payload.sub} sid=${socket.id}`);
     } catch (err: any) {
       this.disconnectWithError(
