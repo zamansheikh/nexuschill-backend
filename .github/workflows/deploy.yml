@@ -1,0 +1,44 @@
+name: Deploy backend
+
+# Triggers on every push to `main`. Use the manual `workflow_dispatch`
+# button (Actions tab) for ad-hoc redeploys without a fresh commit.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Serialize deploys so two pushes back-to-back don't race on the
+# `docker compose up` step. We don't cancel in-flight runs because a
+# half-finished deploy can leave containers stopped.
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Pull + rebuild + health-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: SSH into server and run deploy script
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          # Bash -e so any failed step aborts the whole run. The
+          # deploy script itself uses `set -euo pipefail` for the
+          # same reason; this is belt-and-suspenders.
+          script_stop: true
+          # The repo must be cloned at /opt/nexuschill-backend before
+          # the first run — see scripts/server-bootstrap.sh.
+          script: |
+            set -euo pipefail
+            cd /opt/nexuschill-backend
+            echo "→ Fetching origin/main…"
+            git fetch --quiet origin main
+            git reset --hard origin/main
+            echo "→ Running deploy script…"
+            bash scripts/deploy.sh
