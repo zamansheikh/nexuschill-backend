@@ -35,6 +35,12 @@ export enum TxnType {
   FAMILY_CREATE_FEE = 'family_create_fee',
   /** Reward credited when a host claims a Magic Ball daily task. */
   MAGIC_BALL_REWARD = 'magic_ball_reward',
+  /** Coins debited from the sender when a Lucky Bag is created. */
+  LUCKY_BAG_SEND = 'lucky_bag_send',
+  /** Coins credited to a recipient when they claim a Lucky Bag slot. */
+  LUCKY_BAG_RECEIVE = 'lucky_bag_receive',
+  /** Refund to the sender when a Lucky Bag expires with unclaimed slots. */
+  LUCKY_BAG_REFUND = 'lucky_bag_refund',
 }
 
 export enum TxnStatus {

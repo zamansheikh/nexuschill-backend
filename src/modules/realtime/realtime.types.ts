@@ -42,6 +42,17 @@ export enum RealtimeEventType {
   /** A rocket has filled in this room and is launching now. */
   ROOM_ROCKET_LAUNCH = 'room.rocket.launch',
 
+  /** A user dropped a Lucky Bag in this room. Payload: full LuckyBag
+   *  document (sender hydrated). All members render the floating card +
+   *  countdown; once `availableAt` passes, taps open the claim flow. */
+  ROOM_LUCKY_BAG_SENT = 'room.lucky_bag.sent',
+
+  /** Someone claimed a slot from a Lucky Bag in this room. Payload:
+   *  `{ bagId, slotIndex, claimerId, amount, slotsTaken, slotCount }`.
+   *  Lets every other member tick their progress badge and, when
+   *  `slotsTaken === slotCount`, retire the floating card. */
+  ROOM_LUCKY_BAG_CLAIMED = 'room.lucky_bag.claimed',
+
   // ---------- Global ----------
   /** A rocket fired somewhere on the platform — banner everyone sees. */
   GLOBAL_ROCKET_BANNER = 'global.rocket.banner',

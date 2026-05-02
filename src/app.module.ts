@@ -21,6 +21,7 @@ import { DailyRewardModule } from './modules/daily-reward/daily-reward.module';
 import { FamiliesModule } from './modules/families/families.module';
 import { FcmModule } from './modules/fcm/fcm.module';
 import { GiftsModule } from './modules/gifts/gifts.module';
+import { LuckyBagModule } from './modules/lucky-bag/lucky-bag.module';
 import { MagicBallModule } from './modules/magic-ball/magic-ball.module';
 import { MediaModule } from './modules/media/media.module';
 import { MessagesModule } from './modules/messages/messages.module';
@@ -106,6 +107,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     BannersModule,
     DailyRewardModule,
     MagicBallModule,
+    LuckyBagModule,
     AgoraModule,
     MomentsModule,
     RealtimeModule,
