@@ -57,6 +57,11 @@ export enum RealtimeEventType {
   /** A rocket fired somewhere on the platform — banner everyone sees. */
   GLOBAL_ROCKET_BANNER = 'global.rocket.banner',
 
+  /** A Lucky Bag was just dropped somewhere on the platform — surface a
+   *  top-of-screen banner so users can hop into the room and try to
+   *  catch a slot. Payload: `{ bagId, roomId, roomName, sender, totalCoins, slotCount }`. */
+  GLOBAL_LUCKY_BAG_BANNER = 'global.lucky_bag.banner',
+
   /** Free-form announcement banner from admin. */
   GLOBAL_ANNOUNCEMENT = 'global.announcement',
 

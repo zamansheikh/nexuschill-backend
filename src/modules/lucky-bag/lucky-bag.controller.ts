@@ -49,6 +49,26 @@ export class LuckyBagController {
     return this.svc.claim(id, current.userId);
   }
 
+  /** Bags the caller has SENT — used on the History → Sent tab. */
+  @Get('me/sent')
+  async listMySent(
+    @CurrentUser() current: AuthenticatedUser,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.svc.listSentBy(current.userId, { page, limit });
+  }
+
+  /** Bags where the caller pulled a slot — History → Received tab. */
+  @Get('me/received')
+  async listMyReceived(
+    @CurrentUser() current: AuthenticatedUser,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.svc.listReceivedBy(current.userId, { page, limit });
+  }
+
   /** Full bag detail — sender + every claim populated for the
    *  recipients-list page. */
   @Get(':id')

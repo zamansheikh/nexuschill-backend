@@ -11,6 +11,8 @@ import { randomUUID } from 'crypto';
 
 import { RealtimeService } from '../realtime/realtime.service';
 import { RealtimeEventType } from '../realtime/realtime.types';
+import { Room, RoomDocument } from '../rooms/schemas/room.schema';
+import { User, UserDocument } from '../users/schemas/user.schema';
 import { Currency, TxnType } from '../wallet/schemas/transaction.schema';
 import { WalletService } from '../wallet/wallet.service';
 import {
@@ -43,6 +45,8 @@ export class LuckyBagService {
   constructor(
     @InjectModel(LuckyBag.name)
     private readonly bagModel: Model<LuckyBagDocument>,
+    @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
+    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly wallet: WalletService,
     private readonly realtime: RealtimeService,
   ) {}
@@ -75,6 +79,60 @@ export class LuckyBagService {
       .populate('claims.userId', 'username displayName avatarUrl numericId')
       .exec();
     return populated ?? bag;
+  }
+
+  /**
+   * Bags this user sent. Lightweight projection — caller's history view
+   * cares about totals and timestamps, not every claim row, so we
+   * exclude `slotAmounts` + `claims` from the wire payload via projection.
+   */
+  async listSentBy(userId: string, opts: { page?: number; limit?: number } = {}) {
+    if (!Types.ObjectId.isValid(userId)) {
+      return { items: [], page: 1, limit: 30, total: 0 };
+    }
+    const page = Math.max(1, opts.page ?? 1);
+    const limit = Math.min(100, Math.max(1, opts.limit ?? 30));
+    const skip = (page - 1) * limit;
+    const filter = { senderId: new Types.ObjectId(userId) };
+    const [items, total] = await Promise.all([
+      this.bagModel
+        .find(filter)
+        .select({ slotAmounts: 0 })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.bagModel.countDocuments(filter).exec(),
+    ]);
+    return { items, page, limit, total };
+  }
+
+  /**
+   * Bags where this user has a claim. Mongo can't `$elemMatch` on a
+   * subarray and project just the matching element + parent fields
+   * cleanly here, so we project the whole claims array and let the
+   * mobile page filter to the user's own claim row.
+   */
+  async listReceivedBy(userId: string, opts: { page?: number; limit?: number } = {}) {
+    if (!Types.ObjectId.isValid(userId)) {
+      return { items: [], page: 1, limit: 30, total: 0 };
+    }
+    const page = Math.max(1, opts.page ?? 1);
+    const limit = Math.min(100, Math.max(1, opts.limit ?? 30));
+    const skip = (page - 1) * limit;
+    const filter = { 'claims.userId': new Types.ObjectId(userId) };
+    const [items, total] = await Promise.all([
+      this.bagModel
+        .find(filter)
+        .select({ slotAmounts: 0 })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('senderId', 'username displayName avatarUrl numericId')
+        .exec(),
+      this.bagModel.countDocuments(filter).exec(),
+    ]);
+    return { items, page, limit, total };
   }
 
   /** Active bags in a room — used when a user joins, to render any
@@ -166,6 +224,36 @@ export class LuckyBagService {
       input.roomId,
       RealtimeEventType.ROOM_LUCKY_BAG_SENT,
       { bag: populated?.toJSON() ?? bag.toJSON() },
+    );
+
+    // 5. Global banner so users in OTHER rooms (or just browsing) see
+    //    the drop and can hop in. Compact payload — the banner just
+    //    needs sender + room name to render; full bag fetched on tap.
+    const [room, sender] = await Promise.all([
+      this.roomModel
+        .findById(bag.roomId)
+        .select({ name: 1, numericId: 1 })
+        .exec(),
+      this.userModel
+        .findById(bag.senderId)
+        .select({ displayName: 1, username: 1, avatarUrl: 1 })
+        .exec(),
+    ]);
+    void this.realtime.emitGlobal(
+      RealtimeEventType.GLOBAL_LUCKY_BAG_BANNER,
+      {
+        bagId: bag._id.toString(),
+        roomId: bag.roomId?.toString() ?? null,
+        roomName: room?.name ?? '',
+        senderId: bag.senderId.toString(),
+        senderName:
+          sender?.displayName?.trim().length
+            ? sender!.displayName
+            : (sender?.username ?? 'Someone'),
+        senderAvatarUrl: sender?.avatarUrl ?? '',
+        totalCoins: bag.totalCoins,
+        slotCount: bag.slotCount,
+      },
     );
 
     return bag;
