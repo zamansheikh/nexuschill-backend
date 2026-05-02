@@ -23,8 +23,10 @@ import { PERMISSIONS } from '../admin/permissions.catalog';
 import { BannersService } from './banners.service';
 import {
   CreateHomeBannerDto,
+  CreateRoomBannerDto,
   CreateSplashBannerDto,
   UpdateHomeBannerDto,
+  UpdateRoomBannerDto,
   UpdateSplashBannerDto,
 } from './dto/banner.dto';
 
@@ -140,6 +142,57 @@ export class BannersAdminController {
   @Delete('splash/:id')
   async deleteSplash(@Param('id') id: string) {
     await this.banners.deleteSplash(id);
+    return { ok: true };
+  }
+
+  // ---------- Room banners (in-room sidebar carousel) ----------
+
+  @RequirePermissions(PERMISSIONS.BANNERS_VIEW)
+  @Get('room')
+  async listRoom(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('active') active?: string,
+    @Query('slot') slot?: string,
+  ) {
+    const activeBool = active === undefined ? undefined : active === 'true';
+    const slotNum = slot === undefined ? undefined : Number(slot);
+    return this.banners.listAdminRoom({
+      page,
+      limit,
+      active: activeBool,
+      slot: slotNum,
+    });
+  }
+
+  @RequirePermissions(PERMISSIONS.BANNERS_VIEW)
+  @Get('room/:id')
+  async getRoom(@Param('id') id: string) {
+    const banner = await this.banners.getRoomOrThrow(id);
+    return { banner };
+  }
+
+  @RequirePermissions(PERMISSIONS.BANNERS_MANAGE)
+  @Post('room')
+  async createRoom(
+    @Body() dto: CreateRoomBannerDto,
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ) {
+    const banner = await this.banners.createRoom(dto, admin.adminId);
+    return { banner };
+  }
+
+  @RequirePermissions(PERMISSIONS.BANNERS_MANAGE)
+  @Patch('room/:id')
+  async updateRoom(@Param('id') id: string, @Body() dto: UpdateRoomBannerDto) {
+    const banner = await this.banners.updateRoom(id, dto);
+    return { banner };
+  }
+
+  @RequirePermissions(PERMISSIONS.BANNERS_MANAGE)
+  @Delete('room/:id')
+  async deleteRoom(@Param('id') id: string) {
+    await this.banners.deleteRoom(id);
     return { ok: true };
   }
 }

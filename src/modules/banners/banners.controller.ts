@@ -27,4 +27,16 @@ export class BannersController {
     const banner = await this.banners.getFeaturedSplash();
     return { banner };
   }
+
+  /**
+   * Active in-room sidebar carousel banners. The mobile client groups
+   * the result into two PageView strips using the `slot` field on each
+   * banner (1 = top stack, 2 = bottom).
+   */
+  @Public()
+  @Get('banners/room')
+  async listRoom(@Query('country') country?: string) {
+    const items = await this.banners.listActiveRoom(country);
+    return { items };
+  }
 }

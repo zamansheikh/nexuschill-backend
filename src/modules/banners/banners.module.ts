@@ -5,6 +5,7 @@ import { BannersAdminController } from './banners-admin.controller';
 import { BannersController } from './banners.controller';
 import { BannersService } from './banners.service';
 import { HomeBanner, HomeBannerSchema } from './schemas/home-banner.schema';
+import { RoomBanner, RoomBannerSchema } from './schemas/room-banner.schema';
 import { SplashBanner, SplashBannerSchema } from './schemas/splash-banner.schema';
 
 @Module({
@@ -12,6 +13,7 @@ import { SplashBanner, SplashBannerSchema } from './schemas/splash-banner.schema
     MongooseModule.forFeature([
       { name: HomeBanner.name, schema: HomeBannerSchema },
       { name: SplashBanner.name, schema: SplashBannerSchema },
+      { name: RoomBanner.name, schema: RoomBannerSchema },
     ]),
   ],
   controllers: [BannersAdminController, BannersController],
