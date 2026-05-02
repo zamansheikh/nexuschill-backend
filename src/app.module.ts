@@ -27,6 +27,7 @@ import { MomentsModule } from './modules/moments/moments.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
+import { RoomSupportModule } from './modules/room-support/room-support.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
 import { StoreModule } from './modules/store/store.module';
 import { SvipModule } from './modules/svip/svip.module';
@@ -107,6 +108,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     MomentsModule,
     RealtimeModule,
     RoomsModule,
+    RoomSupportModule,
     MessagesModule,
     FcmModule,
     NotificationsModule,
