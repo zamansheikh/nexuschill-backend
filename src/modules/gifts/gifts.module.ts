@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
+import { RocketModule } from '../rocket/rocket.module';
 import { UsersModule } from '../users/users.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AdminGiftsController } from './admin-gifts.controller';
@@ -17,6 +18,7 @@ import { GiftsService } from './gifts.service';
     ]),
     UsersModule,
     WalletModule,
+    RocketModule, // exposes RocketService for the gift-energy hook
   ],
   controllers: [GiftsController, AdminGiftsController],
   providers: [GiftsService],

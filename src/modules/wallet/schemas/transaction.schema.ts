@@ -41,6 +41,8 @@ export enum TxnType {
   LUCKY_BAG_RECEIVE = 'lucky_bag_receive',
   /** Refund to the sender when a Lucky Bag expires with unclaimed slots. */
   LUCKY_BAG_REFUND = 'lucky_bag_refund',
+  /** Rocket reward — top-1/2/3 fixed payout or random in-room pool. */
+  ROCKET_REWARD = 'rocket_reward',
 }
 
 export enum TxnStatus {

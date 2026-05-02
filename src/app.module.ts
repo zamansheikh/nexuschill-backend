@@ -29,6 +29,7 @@ import { MomentsModule } from './modules/moments/moments.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
+import { RocketModule } from './modules/rocket/rocket.module';
 import { RoomSupportModule } from './modules/room-support/room-support.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
 import { StoreModule } from './modules/store/store.module';
@@ -108,6 +109,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     DailyRewardModule,
     MagicBallModule,
     LuckyBagModule,
+    RocketModule,
     AgoraModule,
     MomentsModule,
     RealtimeModule,

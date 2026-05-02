@@ -108,6 +108,10 @@ export const PERMISSIONS = {
   LUCKY_BAG_VIEW: 'lucky_bag.view',
   LUCKY_BAG_MANAGE: 'lucky_bag.manage',
 
+  // Rocket / Fighter — per-level energy thresholds + reward ladder.
+  ROCKET_VIEW: 'rocket.view',
+  ROCKET_MANAGE: 'rocket.manage',
+
   // Agora — RTC/RTM credentials. View shows masked certificate; manage
   // can rotate keys. Token-mint endpoints are user-side and don't need
   // an admin permission.
@@ -184,6 +188,7 @@ export const DEFAULT_ROLES = [
       'daily_reward.*',
       'magic_ball.*',
       'lucky_bag.*',
+      'rocket.*',
       'agora.*',
       'moments.*',
       'family.*',

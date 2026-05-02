@@ -11,6 +11,7 @@ import { FilterQuery, Model, Types } from 'mongoose';
 import { MediaService } from '../media/media.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RealtimeEventType } from '../realtime/realtime.types';
+import { RocketService } from '../rocket/rocket.service';
 import { UserDocument, UserStatus } from '../users/schemas/user.schema';
 import { UsersService } from '../users/users.service';
 import { WalletService } from '../wallet/wallet.service';
@@ -37,6 +38,7 @@ export class GiftsService {
     private readonly wallet: WalletService,
     private readonly media: MediaService,
     private readonly realtime: RealtimeService,
+    private readonly rocket: RocketService,
   ) {}
 
   // ============== Asset uploads (admin) ==============
@@ -378,6 +380,12 @@ export class GiftsService {
       input.contextId &&
       Types.ObjectId.isValid(input.contextId)
     ) {
+      // Rocket energy hook: 1 coin gifted = 1 energy. Fire-and-forget
+      // — gift sends never fail because the rocket-tracking failed.
+      void this.rocket
+        .addEnergy(input.contextId, input.senderId, totalCoinAmount)
+        .catch(() => undefined);
+
       const [sender, receiver, receiverRoomDiamonds] = await Promise.all([
         this.users.getByIdOrThrow(input.senderId).catch(() => null),
         this.users.getByIdOrThrow(input.receiverId).catch(() => null),
