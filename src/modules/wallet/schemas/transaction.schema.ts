@@ -31,6 +31,8 @@ export enum TxnType {
   TASK_REWARD = 'task_reward',
   REFUND = 'refund',
   CONVERSION = 'conversion',
+  /** One-time coin debit charged when a non-SVIP4 user creates a family. */
+  FAMILY_CREATE_FEE = 'family_create_fee',
 }
 
 export enum TxnStatus {

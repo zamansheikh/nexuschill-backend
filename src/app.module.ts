@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 
@@ -17,6 +18,7 @@ import { BannersModule } from './modules/banners/banners.module';
 import { CommonModule } from './modules/common/common.module';
 import { CosmeticsModule } from './modules/cosmetics/cosmetics.module';
 import { DailyRewardModule } from './modules/daily-reward/daily-reward.module';
+import { FamiliesModule } from './modules/families/families.module';
 import { FcmModule } from './modules/fcm/fcm.module';
 import { GiftsModule } from './modules/gifts/gifts.module';
 import { MediaModule } from './modules/media/media.module';
@@ -28,6 +30,7 @@ import { ResellersModule } from './modules/resellers/resellers.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
 import { StoreModule } from './modules/store/store.module';
 import { SvipModule } from './modules/svip/svip.module';
+import { SystemConfigModule } from './modules/system-config/system-config.module';
 import { UsersModule } from './modules/users/users.module';
 import { WalletModule } from './modules/wallet/wallet.module';
 
@@ -67,6 +70,9 @@ import { WalletModule } from './modules/wallet/wallet.module';
       }),
     }),
 
+    // Drives @Cron decorators across the app (e.g., families auto-disband).
+    ScheduleModule.forRoot(),
+
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => [
@@ -82,11 +88,13 @@ import { WalletModule } from './modules/wallet/wallet.module';
     RedisModule,
     MediaModule,
     CommonModule,
+    SystemConfigModule,
 
     UsersModule,
     AuthModule,
     AdminModule,
     AgenciesModule,
+    FamiliesModule,
     WalletModule,
     GiftsModule,
     ResellersModule,

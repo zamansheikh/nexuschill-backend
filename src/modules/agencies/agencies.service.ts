@@ -11,6 +11,7 @@ import { FilterQuery, Model, Types } from 'mongoose';
 import { AuthenticatedAdmin } from '../admin/admin-auth/strategies/admin-jwt.strategy';
 import { NumericIdService } from '../common/numeric-id.service';
 import { CounterScope } from '../common/schemas/counter.schema';
+import { SystemConfigService } from '../system-config/system-config.service';
 import { UsersService } from '../users/users.service';
 import { Agency, AgencyDocument, AgencyStatus } from './schemas/agency.schema';
 
@@ -40,7 +41,22 @@ export class AgenciesService {
     @InjectModel(Agency.name) private readonly agencyModel: Model<AgencyDocument>,
     private readonly users: UsersService,
     private readonly numericIds: NumericIdService,
+    private readonly config: SystemConfigService,
   ) {}
+
+  /**
+   * Hard kill switch — admin sets `agenciesEnabled: false` in system config
+   * to stop accepting new agencies / host assignments without redeploying.
+   * Existing agencies keep operating; reads stay open.
+   */
+  private async assertFeatureEnabled(): Promise<void> {
+    if (!(await this.config.agenciesEnabled())) {
+      throw new ForbiddenException({
+        code: 'AGENCY_FEATURE_DISABLED',
+        message: 'The agency feature is currently disabled.',
+      });
+    }
+  }
 
   /**
    * Builds a Mongo filter that limits results to the admin's scope.
@@ -111,6 +127,7 @@ export class AgenciesService {
   }
 
   async create(input: CreateAgencyInput): Promise<AgencyDocument> {
+    await this.assertFeatureEnabled();
     const codeUpper = input.code.toUpperCase();
     const exists = await this.agencyModel.countDocuments({ code: codeUpper }).exec();
     if (exists) {
@@ -196,6 +213,7 @@ export class AgenciesService {
     userId: string,
     admin: AuthenticatedAdmin,
   ): Promise<AgencyDocument> {
+    await this.assertFeatureEnabled();
     // Only global admins can assign — agency admins can request via separate flow.
     if (admin.scopeType === 'agency' && admin.scopeId !== id) {
       throw new ForbiddenException({
