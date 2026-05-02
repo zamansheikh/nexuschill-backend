@@ -63,6 +63,6 @@ export class ResellerLedger {
 }
 
 export const ResellerLedgerSchema = SchemaFactory.createForClass(ResellerLedger);
-ResellerLedgerSchema.index({ idempotencyKey: 1 }, { unique: true });
+// `idempotencyKey` is already indexed via `@Prop({ unique: true })`.
 ResellerLedgerSchema.index({ resellerId: 1, createdAt: -1 });
 ResellerLedgerSchema.index({ type: 1, createdAt: -1 });

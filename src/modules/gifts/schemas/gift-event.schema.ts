@@ -67,7 +67,7 @@ export class GiftEvent {
 }
 
 export const GiftEventSchema = SchemaFactory.createForClass(GiftEvent);
-GiftEventSchema.index({ idempotencyKey: 1 }, { unique: true });
+// `idempotencyKey` is already indexed via `@Prop({ unique: true })`.
 GiftEventSchema.index({ senderId: 1, createdAt: -1 });
 GiftEventSchema.index({ receiverId: 1, createdAt: -1 });
 GiftEventSchema.index({ giftId: 1, createdAt: -1 });

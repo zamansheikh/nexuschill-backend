@@ -48,5 +48,5 @@ export class UserSvipStatus {
 }
 
 export const UserSvipStatusSchema = SchemaFactory.createForClass(UserSvipStatus);
-UserSvipStatusSchema.index({ userId: 1 }, { unique: true });
+// `userId` is already indexed via `@Prop({ unique: true })`.
 UserSvipStatusSchema.index({ currentLevel: 1 });

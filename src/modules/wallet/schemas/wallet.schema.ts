@@ -57,5 +57,5 @@ export class Wallet {
 }
 
 export const WalletSchema = SchemaFactory.createForClass(Wallet);
-WalletSchema.index({ userId: 1 }, { unique: true });
+// `userId` is already indexed via `@Prop({ unique: true })`.
 WalletSchema.index({ frozen: 1 });

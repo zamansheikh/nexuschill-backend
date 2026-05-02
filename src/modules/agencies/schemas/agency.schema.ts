@@ -69,7 +69,7 @@ export class Agency {
 }
 
 export const AgencySchema = SchemaFactory.createForClass(Agency);
-AgencySchema.index({ code: 1 }, { unique: true });
+// `code` and `numericId` are already indexed via `@Prop({ unique: true })` —
+// re-declaring here triggers Mongoose duplicate-index warnings.
 AgencySchema.index({ name: 1 });
-AgencySchema.index({ numericId: 1 }, { unique: true, sparse: true });
 AgencySchema.index({ createdAt: -1 });

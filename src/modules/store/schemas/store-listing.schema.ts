@@ -37,7 +37,9 @@ function refToId(v: unknown): unknown {
   },
 })
 export class StoreListing {
-  @Prop({ type: Types.ObjectId, ref: 'CosmeticItem', required: true, index: true })
+  // Indexed via `StoreListingSchema.index({ cosmeticItemId: 1 })` below —
+  // don't re-declare `index: true` here or Mongoose warns about a duplicate.
+  @Prop({ type: Types.ObjectId, ref: 'CosmeticItem', required: true })
   cosmeticItemId!: Types.ObjectId;
 
   @Prop({ type: String, enum: StoreCategory, required: true, index: true })

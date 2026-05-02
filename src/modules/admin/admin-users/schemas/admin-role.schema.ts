@@ -43,5 +43,5 @@ export class AdminRole {
 }
 
 export const AdminRoleSchema = SchemaFactory.createForClass(AdminRole);
-
-AdminRoleSchema.index({ name: 1 }, { unique: true });
+// `name` is already indexed via `@Prop({ unique: true })` above —
+// declaring it again here triggers a Mongoose duplicate-index warning.

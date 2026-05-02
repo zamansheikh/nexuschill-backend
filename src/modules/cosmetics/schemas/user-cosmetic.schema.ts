@@ -53,7 +53,9 @@ export class UserCosmetic {
   acquiredAt!: Date;
 
   /** Null = permanent. Otherwise auto-revokes on `expiresAt`. */
-  @Prop({ type: Date, default: null, index: true })
+  // Indexed via `UserCosmeticSchema.index({ expiresAt: 1 })` below — don't
+  // re-declare `index: true` here or Mongoose warns about a duplicate.
+  @Prop({ type: Date, default: null })
   expiresAt?: Date | null;
 
   /** True if this is the user's currently displayed item of its type. */

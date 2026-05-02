@@ -169,10 +169,9 @@ export class User {
 
 export const UserSchema = SchemaFactory.createForClass(User);
 
-UserSchema.index({ email: 1 }, { unique: true, sparse: true });
-UserSchema.index({ phone: 1 }, { unique: true, sparse: true });
-UserSchema.index({ username: 1 }, { unique: true, sparse: true });
-UserSchema.index({ numericId: 1 }, { unique: true, sparse: true });
+// email/phone/username/numericId are already indexed via their @Prop
+// `unique: true, sparse: true` — re-declaring here triggers Mongoose
+// duplicate-index warnings on every boot.
 UserSchema.index({ createdAt: -1 });
 UserSchema.index({ status: 1 });
 UserSchema.index({ isHost: 1, status: 1 });

@@ -140,6 +140,6 @@ export class Gift {
 }
 
 export const GiftSchema = SchemaFactory.createForClass(Gift);
-GiftSchema.index({ code: 1 }, { unique: true });
+// `code` is already indexed via `@Prop({ unique: true })`.
 GiftSchema.index({ active: 1, sortOrder: -1, priceCoins: 1 });
 GiftSchema.index({ featured: 1, active: 1 });

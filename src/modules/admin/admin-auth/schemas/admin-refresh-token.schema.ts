@@ -11,7 +11,10 @@ export class AdminRefreshToken {
   @Prop({ type: String, required: true, unique: true, index: true })
   tokenHash!: string;
 
-  @Prop({ type: Date, required: true, index: true })
+  // Indexed below as a TTL (`expireAfterSeconds: 0`) so Mongo auto-purges
+  // expired tokens. Don't add `index: true` here or Mongoose warns about
+  // a duplicate declaration.
+  @Prop({ type: Date, required: true })
   expiresAt!: Date;
 
   @Prop({ type: Boolean, default: false })

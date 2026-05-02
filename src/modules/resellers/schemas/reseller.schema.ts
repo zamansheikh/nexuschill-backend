@@ -81,7 +81,7 @@ export class Reseller {
 }
 
 export const ResellerSchema = SchemaFactory.createForClass(Reseller);
-ResellerSchema.index({ code: 1 }, { unique: true });
+// `code` and `numericId` are already indexed via `@Prop({ unique: true })` —
+// re-declaring here triggers Mongoose duplicate-index warnings.
 ResellerSchema.index({ name: 1 });
-ResellerSchema.index({ numericId: 1 }, { unique: true, sparse: true });
 ResellerSchema.index({ createdAt: -1 });

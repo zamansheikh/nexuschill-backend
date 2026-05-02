@@ -110,5 +110,5 @@ export class CosmeticItem {
 }
 
 export const CosmeticItemSchema = SchemaFactory.createForClass(CosmeticItem);
-CosmeticItemSchema.index({ code: 1 }, { unique: true });
+// `code` is already indexed via `@Prop({ unique: true })`.
 CosmeticItemSchema.index({ type: 1, active: 1, sortOrder: -1 });

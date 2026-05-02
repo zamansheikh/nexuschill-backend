@@ -85,7 +85,7 @@ export class AdminUser {
 
 export const AdminUserSchema = SchemaFactory.createForClass(AdminUser);
 
-AdminUserSchema.index({ email: 1 }, { unique: true });
-AdminUserSchema.index({ username: 1 }, { unique: true });
+// `email` and `username` are already indexed via `@Prop({ unique: true })` —
+// re-declaring them here would trigger Mongoose duplicate-index warnings.
 AdminUserSchema.index({ roleId: 1, status: 1 });
 AdminUserSchema.index({ scopeType: 1, scopeId: 1 });

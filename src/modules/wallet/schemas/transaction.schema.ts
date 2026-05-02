@@ -63,7 +63,10 @@ export class Transaction {
    * Groups paired entries (e.g. sender-debit + receiver-credit for a gift).
    * Same correlationId → same logical event.
    */
-  @Prop({ type: String, required: true, index: true })
+  // Indexed via the explicit `TransactionSchema.index({ correlationId: 1 })`
+  // call below — don't add `index: true` here or Mongoose will warn on
+  // every boot about duplicate indexes.
+  @Prop({ type: String, required: true })
   correlationId!: string;
 
   @Prop({ type: Types.ObjectId, ref: 'Wallet', required: true, index: true })
@@ -119,7 +122,7 @@ export class Transaction {
 
 export const TransactionSchema = SchemaFactory.createForClass(Transaction);
 
-TransactionSchema.index({ idempotencyKey: 1 }, { unique: true });
+// `idempotencyKey` is already indexed via `@Prop({ unique: true })`.
 TransactionSchema.index({ correlationId: 1 });
 TransactionSchema.index({ userId: 1, createdAt: -1 });
 TransactionSchema.index({ walletId: 1, createdAt: -1 });

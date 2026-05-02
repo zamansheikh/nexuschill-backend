@@ -46,5 +46,5 @@ export class UserDailyReward {
 }
 
 export const UserDailyRewardSchema = SchemaFactory.createForClass(UserDailyReward);
-UserDailyRewardSchema.index({ userId: 1 }, { unique: true });
+// `userId` is already indexed via `@Prop({ unique: true })`.
 UserDailyRewardSchema.index({ lastClaimedAt: -1 });

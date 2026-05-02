@@ -63,4 +63,4 @@ export class SvipTier {
 }
 
 export const SvipTierSchema = SchemaFactory.createForClass(SvipTier);
-SvipTierSchema.index({ level: 1 }, { unique: true });
+// `level` is already indexed via `@Prop({ unique: true })`.
