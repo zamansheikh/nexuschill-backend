@@ -104,6 +104,10 @@ export const PERMISSIONS = {
   MAGIC_BALL_VIEW: 'magic_ball.view',
   MAGIC_BALL_MANAGE: 'magic_ball.manage',
 
+  // Lucky Bag — platform config (commission rate, coin presets, tiers).
+  LUCKY_BAG_VIEW: 'lucky_bag.view',
+  LUCKY_BAG_MANAGE: 'lucky_bag.manage',
+
   // Agora — RTC/RTM credentials. View shows masked certificate; manage
   // can rotate keys. Token-mint endpoints are user-side and don't need
   // an admin permission.
@@ -179,6 +183,7 @@ export const DEFAULT_ROLES = [
       'banners.*',
       'daily_reward.*',
       'magic_ball.*',
+      'lucky_bag.*',
       'agora.*',
       'moments.*',
       'family.*',

@@ -13,6 +13,22 @@ export enum LuckyBagStatus {
 }
 
 /**
+ * How the bag's totalCoins are split into per-slot amounts. Both modes
+ * honour the platform commission setting — they differ only in HOW the
+ * user-pool (after commission deduction) is sliced.
+ */
+export enum LuckyBagDistributionMode {
+  /** Random "leftover" portions — first-mover advantage feels stronger. */
+  RANDOM = 'random',
+  /**
+   * Fixed percentages per slot from `LuckyBagConfig.tiers` — matches
+   * the schedule in `docs/test.txt`. Slot 1 always gets the largest
+   * share so the "lucky pull" feels rewarding.
+   */
+  FIXED_TIER = 'fixed_tier',
+}
+
+/**
  * One claim record — appended to `claims` when a recipient grabs a slot.
  * `slotIndex` references the position in the (immutable) `slotAmounts`
  * array generated at create time; this guarantees every claim takes a
@@ -92,6 +108,30 @@ export class LuckyBag {
 
   @Prop({ type: String, enum: LuckyBagStatus, default: LuckyBagStatus.PENDING, index: true })
   status!: LuckyBagStatus;
+
+  /**
+   * Random or fixed-tier — chosen by the sender at create time.
+   * Defaults to RANDOM for backward-compatibility with bags created
+   * before the field existed.
+   */
+  @Prop({
+    type: String,
+    enum: LuckyBagDistributionMode,
+    default: LuckyBagDistributionMode.RANDOM,
+  })
+  distributionMode!: LuckyBagDistributionMode;
+
+  /**
+   * Whether the platform commission was applied at create time.
+   * Captured here (vs. read off the live config) because the rate could
+   * be tweaked later and we want each bag's accounting to be stable.
+   */
+  @Prop({ type: Boolean, default: false })
+  applyCommission!: boolean;
+
+  /** Coins kept by the platform on this bag (0 when commission not applied). */
+  @Prop({ type: Number, default: 0, min: 0 })
+  commissionAmount!: number;
 
   /**
    * Wallet idempotencyKey for the sender's debit (used to ensure a

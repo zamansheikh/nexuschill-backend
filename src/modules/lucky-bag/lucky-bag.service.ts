@@ -16,7 +16,13 @@ import { User, UserDocument } from '../users/schemas/user.schema';
 import { Currency, TxnType } from '../wallet/schemas/transaction.schema';
 import { WalletService } from '../wallet/wallet.service';
 import {
+  LuckyBagConfig,
+  LuckyBagConfigDocument,
+  LuckyBagTier,
+} from './schemas/lucky-bag-config.schema';
+import {
   LuckyBag,
+  LuckyBagDistributionMode,
   LuckyBagDocument,
   LuckyBagStatus,
 } from './schemas/lucky-bag.schema';
@@ -32,12 +38,63 @@ const COUNTDOWN_SECONDS = 12;
 /** Total bag lifetime — after this, unclaimed slots refund to sender. */
 const LIFETIME_HOURS = 24;
 
+const SINGLETON_KEY = 'singleton';
+
+/**
+ * Default tiers — taken verbatim from `docs/test.txt`. The fixed-tier
+ * algorithm uses these as the user-pool split (commission, when applied,
+ * is taken off the top before this table is consulted).
+ *
+ * Each row's `percentages` MUST sum to 1.0 within ε. The lazy-upsert
+ * seeds them on first read; admins can edit via PATCH afterwards.
+ */
+const DEFAULT_TIERS: LuckyBagTier[] = [
+  {
+    slotCount: 5,
+    percentages: [0.35, 0.25, 0.2, 0.15, 0.05],
+  },
+  {
+    slotCount: 10,
+    percentages: [0.25, 0.18, 0.15, 0.12, 0.1, 0.08, 0.05, 0.04, 0.02, 0.01],
+  },
+  {
+    slotCount: 20,
+    percentages: [
+      0.18, 0.14, 0.11, 0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.03, 0.02,
+      0.02, 0.02, 0.02, 0.01, 0.01, 0.01, 0.005, 0.005,
+    ],
+  },
+  {
+    slotCount: 30,
+    percentages: [
+      0.15, 0.12, 0.1, 0.08, 0.07, 0.06, 0.05, 0.04, 0.04, 0.03, 0.03, 0.02,
+      0.02, 0.02, 0.02, 0.015, 0.015, 0.015, 0.015, 0.01, 0.01, 0.01, 0.01,
+      0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
+    ],
+  },
+  {
+    slotCount: 50,
+    percentages: [
+      0.12, 0.1, 0.08, 0.07, 0.06, 0.05, 0.04, 0.04, 0.03, 0.03, 0.02, 0.02,
+      0.02, 0.02, 0.02, 0.015, 0.015, 0.015, 0.015, 0.015, 0.01, 0.01, 0.01,
+      0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.005, 0.005, 0.005, 0.005,
+      0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.0025, 0.0025, 0.0025, 0.0025,
+      0.0025, 0.0025, 0.0025, 0.0025, 0.0025, 0.0025,
+    ],
+  },
+];
+
 interface CreateLuckyBagInput {
   senderId: string;
   /** Required for v1 — bags are room-scoped. Personal/profile bags are Phase 2. */
   roomId: string;
   totalCoins: number;
   slotCount: number;
+  /**
+   * Optional — defaults to RANDOM. Sender picks from the composer's
+   * "Distribution mode" toggle.
+   */
+  distributionMode?: LuckyBagDistributionMode;
 }
 
 @Injectable()
@@ -45,11 +102,112 @@ export class LuckyBagService {
   constructor(
     @InjectModel(LuckyBag.name)
     private readonly bagModel: Model<LuckyBagDocument>,
+    @InjectModel(LuckyBagConfig.name)
+    private readonly configModel: Model<LuckyBagConfigDocument>,
     @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly wallet: WalletService,
     private readonly realtime: RealtimeService,
   ) {}
+
+  // ============================================================
+  // Platform config
+  // ============================================================
+
+  /**
+   * Lazy-upsert config singleton. First read on a fresh deployment
+   * seeds defaults straight from `docs/test.txt` so the composer has
+   * useful presets before an admin even visits the panel.
+   */
+  async getConfig(): Promise<LuckyBagConfigDocument> {
+    return this.configModel
+      .findOneAndUpdate(
+        { key: SINGLETON_KEY },
+        {
+          $setOnInsert: {
+            key: SINGLETON_KEY,
+            enabled: true,
+            commissionRate: 0.25,
+            applyCommissionByDefault: true,
+            coinPresets: [60000, 150000, 210000, 300000, 600000],
+            tiers: DEFAULT_TIERS,
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      )
+      .exec();
+  }
+
+  async updateConfig(update: {
+    enabled?: boolean;
+    commissionRate?: number;
+    applyCommissionByDefault?: boolean;
+    coinPresets?: number[];
+    tiers?: LuckyBagTier[];
+  }): Promise<LuckyBagConfigDocument> {
+    if (update.commissionRate !== undefined) {
+      if (update.commissionRate < 0 || update.commissionRate > 1) {
+        throw new BadRequestException({
+          code: 'INVALID_COMMISSION',
+          message: 'commissionRate must be between 0 and 1',
+        });
+      }
+    }
+    if (update.tiers !== undefined) {
+      // Validate every tier sums to 1.0 and the percentages array
+      // matches the slotCount. Reject the whole patch if anything is
+      // off so admin gets a clear single error.
+      for (const t of update.tiers) {
+        if (!Number.isInteger(t.slotCount) || t.slotCount < 1) {
+          throw new BadRequestException({
+            code: 'INVALID_TIER',
+            message: `Tier slotCount must be a positive integer (got ${t.slotCount})`,
+          });
+        }
+        if (t.percentages.length !== t.slotCount) {
+          throw new BadRequestException({
+            code: 'INVALID_TIER',
+            message: `Tier ${t.slotCount}: percentages length (${t.percentages.length}) must equal slotCount`,
+          });
+        }
+        const sum = t.percentages.reduce((s, p) => s + p, 0);
+        if (Math.abs(sum - 1) > 0.001) {
+          throw new BadRequestException({
+            code: 'INVALID_TIER',
+            message: `Tier ${t.slotCount}: percentages must sum to 1.0 (got ${sum.toFixed(4)})`,
+          });
+        }
+      }
+    }
+    if (update.coinPresets !== undefined) {
+      if (!update.coinPresets.every((c) => Number.isInteger(c) && c > 0)) {
+        throw new BadRequestException({
+          code: 'INVALID_PRESETS',
+          message: 'coinPresets must be positive integers',
+        });
+      }
+    }
+
+    const set: Record<string, unknown> = {};
+    if (update.enabled !== undefined) set.enabled = update.enabled;
+    if (update.commissionRate !== undefined) set.commissionRate = update.commissionRate;
+    if (update.applyCommissionByDefault !== undefined) {
+      set.applyCommissionByDefault = update.applyCommissionByDefault;
+    }
+    if (update.coinPresets !== undefined) set.coinPresets = update.coinPresets;
+    if (update.tiers !== undefined) {
+      // Sort by slotCount ascending so the admin UI gets a stable order.
+      set.tiers = [...update.tiers].sort((a, b) => a.slotCount - b.slotCount);
+    }
+
+    return this.configModel
+      .findOneAndUpdate(
+        { key: SINGLETON_KEY },
+        { $set: set, $setOnInsert: { key: SINGLETON_KEY } },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      )
+      .exec();
+  }
 
   // ============================================================
   // Read
@@ -181,6 +339,26 @@ export class LuckyBagService {
       });
     }
 
+    // Resolve platform config — drives commission + tier choice +
+    // (when in fixed-tier mode) which slotCounts are allowed.
+    const config = await this.getConfig();
+    if (!config.enabled) {
+      throw new ForbiddenException({
+        code: 'LUCKY_BAG_DISABLED',
+        message: 'Lucky Bag is currently disabled.',
+      });
+    }
+    const mode = input.distributionMode ?? LuckyBagDistributionMode.RANDOM;
+    if (mode === LuckyBagDistributionMode.FIXED_TIER) {
+      const tier = config.tiers.find((t) => t.slotCount === input.slotCount);
+      if (!tier) {
+        throw new BadRequestException({
+          code: 'NO_MATCHING_TIER',
+          message: `Fixed-tier mode requires a configured tier for slotCount=${input.slotCount}`,
+        });
+      }
+    }
+
     // 1. Debit the sender first. If the wallet rejects (insufficient /
     //    frozen) we never persist a bag.
     const debitKey = `lucky-bag:create:${input.senderId}:${randomUUID()}`;
@@ -194,8 +372,22 @@ export class LuckyBagService {
       performedBy: input.senderId,
     });
 
-    // 2. Pre-compute random per-slot amounts that sum to totalCoins.
-    const slotAmounts = this.distribute(input.totalCoins, input.slotCount);
+    // 2. Compute commission + per-slot amounts. Both modes split the
+    //    user pool (totalCoins − commission) so the platform's cut is
+    //    consistent across modes; only the WAY the pool is sliced changes.
+    const applyCommission = config.applyCommissionByDefault;
+    const commissionAmount = applyCommission
+      ? Math.floor(input.totalCoins * config.commissionRate)
+      : 0;
+    const userPool = input.totalCoins - commissionAmount;
+    const slotAmounts =
+      mode === LuckyBagDistributionMode.FIXED_TIER
+        ? this.distributeFixedTier(
+            userPool,
+            input.slotCount,
+            config.tiers.find((t) => t.slotCount === input.slotCount)!.percentages,
+          )
+        : this.distributeRandom(userPool, input.slotCount);
 
     // 3. Persist the bag.
     const now = new Date();
@@ -210,6 +402,9 @@ export class LuckyBagService {
       availableAt: new Date(now.getTime() + COUNTDOWN_SECONDS * 1000),
       expiresAt: new Date(now.getTime() + LIFETIME_HOURS * 3600 * 1000),
       status: LuckyBagStatus.PENDING,
+      distributionMode: mode,
+      applyCommission,
+      commissionAmount,
       debitIdempotencyKey: debitKey,
     });
 
@@ -450,7 +645,7 @@ export class LuckyBagService {
    * resulting amounts feel "lucky" — a couple lucky big wins, a long
    * tail of small ones — without any slot ever being zero.
    */
-  private distribute(total: number, slots: number): number[] {
+  private distributeRandom(total: number, slots: number): number[] {
     const out: number[] = new Array(slots).fill(0);
     let remaining = total;
     let remainingSlots = slots;
@@ -469,6 +664,45 @@ export class LuckyBagService {
     for (let i = out.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  }
+
+  /**
+   * Fixed-tier distribution from `docs/test.txt`. Slot 1 gets the
+   * largest cut, slot N the smallest. Floor each percentage × pool to
+   * avoid totals exceeding the pool; any rounding leftover (always
+   * non-negative, at most slotCount−1 coins) flows back into slot 1
+   * so the user-pool sum is always exact and the biggest payout still
+   * "feels" the biggest. Output order matches the percentages array
+   * (no shuffle — slot rank is part of the design).
+   */
+  private distributeFixedTier(
+    total: number,
+    slots: number,
+    percentages: number[],
+  ): number[] {
+    if (percentages.length !== slots) {
+      // Defensive — caller should have validated already.
+      throw new BadRequestException({
+        code: 'TIER_LENGTH_MISMATCH',
+        message: 'percentages length must equal slot count',
+      });
+    }
+    const out: number[] = percentages.map((p) =>
+      Math.max(0, Math.floor(total * p)),
+    );
+    const sum = out.reduce((s, v) => s + v, 0);
+    const leftover = total - sum;
+    if (leftover > 0) out[0] += leftover;
+    // Defensive: never let a slot end up at 0 (the random algorithm
+    // never does either). If percentages would round to 0 for the
+    // smallest slots, top them up by stealing from slot 0.
+    for (let i = 1; i < out.length; i++) {
+      if (out[i] === 0 && out[0] > 1) {
+        out[i] = 1;
+        out[0] -= 1;
+      }
     }
     return out;
   }
