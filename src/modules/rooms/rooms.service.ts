@@ -17,6 +17,7 @@ import { NumericIdService } from '../common/numeric-id.service';
 import { CounterScope } from '../common/schemas/counter.schema';
 import { CosmeticsService } from '../cosmetics/cosmetics.service';
 import { GiftsService } from '../gifts/gifts.service';
+import { MagicBallService } from '../magic-ball/magic-ball.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RealtimeEventType } from '../realtime/realtime.types';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -72,7 +73,26 @@ export class RoomsService {
     private readonly realtime: RealtimeService,
     private readonly gifts: GiftsService,
     private readonly cosmetics: CosmeticsService,
+    private readonly magicBall: MagicBallService,
   ) {}
+
+  /**
+   * Fire-and-forget: credit the user's Magic Ball `mic_minutes` counter
+   * with the duration since they joined this seat. Called from every
+   * seat-vacation path (leave / kick / displaced ghost). Never blocks
+   * the seat update — a magic-ball failure should never strand a seat.
+   */
+  private recordSeatLeave(
+    userOid: Types.ObjectId | null | undefined,
+    joinedAt: Date | null | undefined,
+  ): void {
+    if (!userOid || !joinedAt) return;
+    const seconds = Math.max(0, Math.floor((Date.now() - joinedAt.getTime()) / 1000));
+    if (seconds <= 0) return;
+    void this.magicBall
+      .recordMicSessionSeconds(userOid.toString(), seconds)
+      .catch(() => undefined);
+  }
 
   // ============== Lifecycle ==============
 
@@ -647,6 +667,10 @@ export class RoomsService {
         )
         .exec();
       for (const g of ghosts) {
+        // Credit the elapsed time on the ghost seat to mic-minutes —
+        // the user WAS on a mic from `g.joinedAt` until now, even
+        // though they didn't politely leave.
+        this.recordSeatLeave(g.userId, g.joinedAt);
         const fresh = await this.seatModel.findById(g._id).exec();
         if (fresh) {
           void this.realtime.emitToRoom(
@@ -681,6 +705,12 @@ export class RoomsService {
   async leaveSeat(roomId: string, userId: string, seatIndex: number) {
     const room = await this.getOrThrow(roomId);
     const userOid = new Types.ObjectId(userId);
+    // Read the pre-update doc so we can credit elapsed mic-minutes to
+    // the user's Magic Ball counter — `findOneAndUpdate` below wipes
+    // joinedAt as part of the same atomic op.
+    const before = await this.seatModel
+      .findOne({ roomId: room._id, seatIndex, userId: userOid })
+      .exec();
     const res = await this.seatModel
       .findOneAndUpdate(
         { roomId: room._id, seatIndex, userId: userOid },
@@ -694,6 +724,7 @@ export class RoomsService {
         message: 'You are not on this seat',
       });
     }
+    this.recordSeatLeave(userOid, before?.joinedAt ?? null);
     void this.realtime.emitToRoom(
       room._id.toString(),
       RealtimeEventType.SEAT_UPDATED,
@@ -778,6 +809,11 @@ export class RoomsService {
         message: 'Owner seat cannot be vacated by an admin',
       });
     }
+    // Capture pre-update occupant + joinedAt — the kick still counts
+    // as completed mic time toward their Magic Ball counter.
+    const before = await this.seatModel
+      .findOne({ roomId: room._id, seatIndex, userId: { $ne: null } })
+      .exec();
     const seat = await this.seatModel
       .findOneAndUpdate(
         { roomId: room._id, seatIndex, userId: { $ne: null } },
@@ -791,6 +827,7 @@ export class RoomsService {
         message: 'Seat is already empty',
       });
     }
+    this.recordSeatLeave(before?.userId ?? null, before?.joinedAt ?? null);
     void this.realtime.emitToRoom(
       room._id.toString(),
       RealtimeEventType.SEAT_UPDATED,

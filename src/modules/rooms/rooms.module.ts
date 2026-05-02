@@ -4,6 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { AgoraModule } from '../agora/agora.module';
 import { CosmeticsModule } from '../cosmetics/cosmetics.module';
 import { GiftsModule } from '../gifts/gifts.module';
+import { MagicBallModule } from '../magic-ball/magic-ball.module';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { RoomsAdminController } from './rooms-admin.controller';
 import { RoomsController } from './rooms.controller';
@@ -33,6 +34,10 @@ import { Room, RoomSchema } from './schemas/room.schema';
     // Imported so RoomsService can resolve a joining user's equipped
     // vehicle and embed it in the ROOM_MEMBER_JOINED realtime event.
     CosmeticsModule,
+    // Server-authoritative mic-session tracking — when a user vacates a
+    // seat (leave / kick / displaced ghost), RoomsService records the
+    // duration toward the user's `mic_minutes` Magic Ball counter.
+    MagicBallModule,
   ],
   controllers: [RoomsController, RoomsAdminController],
   providers: [RoomsService],
