@@ -100,6 +100,10 @@ export const PERMISSIONS = {
   DAILY_REWARD_VIEW: 'daily_reward.view',
   DAILY_REWARD_MANAGE: 'daily_reward.manage',
 
+  // Magic Ball — host daily-task config.
+  MAGIC_BALL_VIEW: 'magic_ball.view',
+  MAGIC_BALL_MANAGE: 'magic_ball.manage',
+
   // Agora — RTC/RTM credentials. View shows masked certificate; manage
   // can rotate keys. Token-mint endpoints are user-side and don't need
   // an admin permission.
@@ -174,6 +178,7 @@ export const DEFAULT_ROLES = [
       'cosmetics.*',
       'banners.*',
       'daily_reward.*',
+      'magic_ball.*',
       'agora.*',
       'moments.*',
       'family.*',

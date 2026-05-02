@@ -33,6 +33,8 @@ export enum TxnType {
   CONVERSION = 'conversion',
   /** One-time coin debit charged when a non-SVIP4 user creates a family. */
   FAMILY_CREATE_FEE = 'family_create_fee',
+  /** Reward credited when a host claims a Magic Ball daily task. */
+  MAGIC_BALL_REWARD = 'magic_ball_reward',
 }
 
 export enum TxnStatus {
