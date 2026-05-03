@@ -88,6 +88,13 @@ export const PERMISSIONS = {
   COSMETICS_VIEW: 'cosmetics.view',
   COSMETICS_MANAGE: 'cosmetics.manage',
 
+  // Honor / Achievement badges. Catalog management is `manage`; the
+  // direct-grant action gets its own permission so a moderator can
+  // hand out medals without having full catalog edit rights.
+  HONORS_VIEW: 'honors.view',
+  HONORS_MANAGE: 'honors.manage',
+  HONORS_GRANT: 'honors.grant',
+
   // Banners — home-screen carousel + custom splash banners.
   BANNERS_VIEW: 'banners.view',
   BANNERS_MANAGE: 'banners.manage',

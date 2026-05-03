@@ -9,6 +9,7 @@ import {
   FamilyMember,
   FamilyMemberSchema,
 } from '../families/schemas/family-member.schema';
+import { HonorsModule } from '../honors/honors.module';
 import { Room, RoomSchema } from '../rooms/schemas/room.schema';
 import { SocialModule } from '../social/social.module';
 import {
@@ -48,6 +49,11 @@ import { UsersService } from './users.service';
     // on profile responses without forcing the mobile app to make
     // multiple round trips per profile open.
     SocialModule,
+    // HonorsModule is also a leaf (no UsersModule dep) — exporting
+    // HonorsService gives UsersController access to embed each user's
+    // earned honors directly on `/users/:id` and `/users/me`. Saves
+    // the mobile profile page a round-trip per open.
+    HonorsModule,
   ],
   controllers: [UsersController],
   providers: [UsersService],

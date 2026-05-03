@@ -15,6 +15,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 
 import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import { HonorsService } from '../honors/honors.service';
 import { MediaService } from '../media/media.service';
 import { SocialService } from '../social/social.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -30,6 +31,7 @@ export class UsersController {
     private readonly users: UsersService,
     private readonly media: MediaService,
     private readonly social: SocialService,
+    private readonly honors: HonorsService,
   ) {}
 
   // ---------- Owner endpoints ----------
@@ -42,14 +44,16 @@ export class UsersController {
     // the full tile strip in one request. followersCount /
     // followingCount come for free — they're denormalized fields on
     // the user doc.
-    const [visitorsCount, enrichment] = await Promise.all([
+    const [visitorsCount, enrichment, honors] = await Promise.all([
       this.social.visitorsCount(current.userId),
       this.users.getProfileEnrichment(current.userId),
+      this.honors.listForUser(current.userId),
     ]);
     const json = user.toJSON() as Record<string, any>;
     json.visitorsCount = visitorsCount;
     json.family = enrichment.family;
     json.svipLevel = enrichment.svipLevel;
+    json.honors = honors.items;
     return { user: json };
   }
 
@@ -147,15 +151,17 @@ export class UsersController {
     //   • visitorsCount — same three-tile stat strip the owner sees.
     //   • family — name + level for the "Family: …" line.
     //   • svipLevel — drives the SVIP1..9 chip; 0 means hidden.
-    const [isFollowing, visitorsCount, enrichment] = await Promise.all([
+    const [isFollowing, visitorsCount, enrichment, honors] = await Promise.all([
       this.social.isFollowing(current.userId, id),
       this.social.visitorsCount(id),
       this.users.getProfileEnrichment(id),
+      this.honors.listForUser(id),
     ]);
     (json as Record<string, unknown>).isFollowing = isFollowing;
     (json as Record<string, unknown>).visitorsCount = visitorsCount;
     (json as Record<string, unknown>).family = enrichment.family;
     (json as Record<string, unknown>).svipLevel = enrichment.svipLevel;
+    (json as Record<string, unknown>).honors = honors.items;
     return { user: json };
   }
 
