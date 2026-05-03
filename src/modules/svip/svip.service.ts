@@ -1,11 +1,15 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { randomUUID } from 'crypto';
 import { Model, Types } from 'mongoose';
 
+import { Currency, TxnType } from '../wallet/schemas/transaction.schema';
+import { WalletService } from '../wallet/wallet.service';
 import { SVIP_PRIVILEGES, PrivilegeDef } from './privileges.catalog';
 import { SvipTier, SvipTierDocument } from './schemas/svip-tier.schema';
 import { UserSvipStatus, UserSvipStatusDocument } from './schemas/user-svip-status.schema';
@@ -16,6 +20,7 @@ export class SvipService {
     @InjectModel(SvipTier.name) private readonly tierModel: Model<SvipTierDocument>,
     @InjectModel(UserSvipStatus.name)
     private readonly statusModel: Model<UserSvipStatusDocument>,
+    private readonly wallet: WalletService,
   ) {}
 
   // ---------- Privileges catalog ----------
@@ -137,6 +142,98 @@ export class SvipService {
     const set = new Set<string>();
     for (const t of tiers) for (const p of t.privileges) set.add(p);
     return [...set];
+  }
+
+  // ---------- Direct purchase (coins → tier) ----------
+
+  /**
+   * Pay coins to acquire an SVIP tier directly. Bypasses the monthly-
+   * points pathway. Used by the mobile SVIP page when the user has
+   * enough coins; the page falls back to the Recharge CTA otherwise.
+   *
+   * Flow:
+   *   1. Resolve the tier and validate it's purchasable (`coinPrice > 0`).
+   *   2. Refuse if the caller already holds an equal-or-higher tier —
+   *      buying SVIP3 when you're already SVIP5 wastes coins for no
+   *      gain, so we 409 instead of silently accepting.
+   *   3. Wallet debit (idempotency key derived from user + tier so a
+   *      double-tap doesn't double-charge).
+   *   4. Bump UserSvipStatus.currentLevel + extend `expiresAt` by the
+   *      tier's `durationDays`. If the user already had time left
+   *      from a prior purchase, we add to it rather than reset — so
+   *      buying SVIP1 in March then SVIP1 again in April gives ~60
+   *      days, not 30.
+   *
+   * Returns the fresh status doc so the mobile page can refresh state
+   * in one round-trip.
+   */
+  async purchaseTier(
+    userId: string,
+    level: number,
+  ): Promise<UserSvipStatusDocument> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user id',
+      });
+    }
+    const tier = await this.getByLevel(level);
+    if (!tier || !tier.active) {
+      throw new NotFoundException({
+        code: 'SVIP_TIER_NOT_FOUND',
+        message: `SVIP tier ${level} not found`,
+      });
+    }
+    if (tier.coinPrice <= 0) {
+      throw new BadRequestException({
+        code: 'TIER_NOT_PURCHASABLE',
+        message: 'This tier is not available for direct purchase',
+      });
+    }
+
+    const status = await this.getOrCreateStatus(userId);
+    if (status.currentLevel >= level) {
+      throw new ConflictException({
+        code: 'ALREADY_OWNED',
+        message: 'You already hold this tier or higher',
+      });
+    }
+
+    // Stable idempotency: a double-tap within the same second of the
+    // same (user, tier) attempts the same key, so the wallet's
+    // dedupe path returns the existing txn. Random suffix from a
+    // UUID keeps repeat-purchases of the same tier across separate
+    // sessions distinct.
+    await this.wallet.debit(Currency.COINS, {
+      userId,
+      amount: tier.coinPrice,
+      type: TxnType.SVIP_PURCHASE,
+      idempotencyKey: `svip-purchase:${userId}:${tier._id.toString()}:${randomUUID()}`,
+      description: `Purchased ${tier.name}`,
+      refType: 'svip_tier',
+      refId: tier._id.toString(),
+    });
+
+    // Extend expiry from whichever is later: now or the user's
+    // existing expiry. Prevents losing remaining time when buying a
+    // higher tier mid-cycle. `durationDays: 0` means permanent —
+    // we drop expiresAt entirely in that case.
+    const now = new Date();
+    let expiresAt: Date | null;
+    if (tier.durationDays === 0) {
+      expiresAt = null;
+    } else {
+      const base =
+        status.expiresAt && status.expiresAt > now ? status.expiresAt : now;
+      expiresAt = new Date(
+        base.getTime() + tier.durationDays * 24 * 60 * 60 * 1000,
+      );
+    }
+    status.currentLevel = level;
+    if (level > status.highestLevel) status.highestLevel = level;
+    status.expiresAt = expiresAt;
+    await status.save();
+    return status;
   }
 
   // ---------- helpers ----------

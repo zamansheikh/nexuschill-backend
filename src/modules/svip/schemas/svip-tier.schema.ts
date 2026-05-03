@@ -31,6 +31,24 @@ export class SvipTier {
   @Prop({ type: Number, default: 0, min: 0 })
   coinReward!: number;
 
+  /**
+   * Coins required to **buy** this tier outright via the SVIP page.
+   * Zero (the default) means the tier can only be reached via the
+   * monthly-points pathway — admins set this per tier in the catalog
+   * to unlock direct purchase. The mobile UI reads it to decide
+   * between Buy and Recharge CTAs.
+   */
+  @Prop({ type: Number, default: 0, min: 0 })
+  coinPrice!: number;
+
+  /**
+   * How long the directly-purchased tier lasts, in days. Defaults to
+   * 30 — common "monthly SVIP" model. Set to 0 for "permanent" if a
+   * tier should never lapse on a manual buy.
+   */
+  @Prop({ type: Number, default: 30, min: 0 })
+  durationDays!: number;
+
   /** Hero image / dragon icon shown on the tier landing screen. */
   @Prop({ type: String, default: '' })
   iconUrl!: string;

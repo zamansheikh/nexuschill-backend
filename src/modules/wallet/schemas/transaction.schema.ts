@@ -43,6 +43,9 @@ export enum TxnType {
   LUCKY_BAG_REFUND = 'lucky_bag_refund',
   /** Rocket reward — top-1/2/3 fixed payout or random in-room pool. */
   ROCKET_REWARD = 'rocket_reward',
+  /** Coins debited when a user buys an SVIP tier directly via the
+   *  SVIP page (instead of earning it via monthly points). */
+  SVIP_PURCHASE = 'svip_purchase',
 }
 
 export enum TxnStatus {

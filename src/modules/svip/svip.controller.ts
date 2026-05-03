@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
 
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
@@ -33,5 +33,25 @@ export class SvipController {
     const status = await this.svip.getOrCreateStatus(current.userId);
     const privileges = await this.svip.resolvedPrivileges(current.userId);
     return { status, privileges };
+  }
+
+  /**
+   * Buy an SVIP tier with coins. Errors:
+   *   • 400 INVALID_USER_ID — caller id malformed (shouldn't happen with auth).
+   *   • 400 TIER_NOT_PURCHASABLE — admins haven't set `coinPrice` for this tier.
+   *   • 404 SVIP_TIER_NOT_FOUND — bad level number.
+   *   • 409 ALREADY_OWNED — caller already at this tier or higher.
+   *   • 400 INSUFFICIENT_BALANCE — wallet debit failed (the mobile UI
+   *     pre-checks balance and shows Recharge instead, so this is a
+   *     race-condition guardrail rather than the common path).
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('tiers/:level/purchase')
+  async purchaseTier(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('level', ParseIntPipe) level: number,
+  ) {
+    const status = await this.svip.purchaseTier(current.userId, level);
+    return { status };
   }
 }

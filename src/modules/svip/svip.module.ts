@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
+import { WalletModule } from '../wallet/wallet.module';
 import { SvipAdminController } from './svip-admin.controller';
 import { SvipController } from './svip.controller';
 import { SvipService } from './svip.service';
@@ -16,6 +17,11 @@ import {
       { name: SvipTier.name, schema: SvipTierSchema },
       { name: UserSvipStatus.name, schema: UserSvipStatusSchema },
     ]),
+    // Direct-purchase flow debits the user's coin wallet via
+    // `WalletService.debit` and creates a SVIP_PURCHASE transaction.
+    // WalletModule has no dependency on SvipModule, so this arrow is
+    // one-way.
+    WalletModule,
   ],
   controllers: [SvipAdminController, SvipController],
   providers: [SvipService],
