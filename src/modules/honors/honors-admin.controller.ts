@@ -1,13 +1,19 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 import { AdminOnly } from '../admin/admin-auth/decorators/admin-only.decorator';
 import { CurrentAdmin } from '../admin/admin-auth/decorators/current-admin.decorator';
@@ -21,6 +27,9 @@ import {
 } from './dto/honors.dto';
 import { HonorCategory } from './schemas/honor-item.schema';
 import { HonorsService } from './honors.service';
+
+const MAX_ICON_BYTES = 5 * 1024 * 1024;
+const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
 /// Admin oversight + management for honors.
 ///
@@ -66,6 +75,66 @@ export class HonorsAdminController {
   async update(@Param('id') id: string, @Body() dto: UpdateHonorItemDto) {
     const item = await this.honors.update(id, dto);
     return { item };
+  }
+
+  // -------- Asset uploads --------
+
+  /**
+   * Upload a static-image icon. Returns `{ url, publicId, assetType }`
+   * — admin form persists those onto the honor item via PATCH so the
+   * upload + form-save are decoupled (idiomatic with the existing
+   * cosmetics flow).
+   */
+  @RequirePermissions(PERMISSIONS.HONORS_MANAGE)
+  @HttpCode(HttpStatus.OK)
+  @Post('admin/honors/upload/icon')
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: MAX_ICON_BYTES } }),
+  )
+  async uploadIconImage(@UploadedFile() file?: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException({
+        code: 'FILE_REQUIRED',
+        message: 'File required',
+      });
+    }
+    if (!IMAGE_MIME_TYPES.includes(file.mimetype)) {
+      throw new BadRequestException({
+        code: 'INVALID_FILE_TYPE',
+        message: `Image must be one of ${IMAGE_MIME_TYPES.join(', ')}`,
+        details: { received: file.mimetype },
+      });
+    }
+    return this.honors.uploadIconImage(file.buffer);
+  }
+
+  /**
+   * Upload an SVGA animated icon. Cloudinary stores it as raw asset.
+   * The mobile renderer detects `iconAssetType: svga` and pipes the
+   * URL through the SVGA player instead of CachedNetworkImage.
+   */
+  @RequirePermissions(PERMISSIONS.HONORS_MANAGE)
+  @HttpCode(HttpStatus.OK)
+  @Post('admin/honors/upload/svga')
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: MAX_ICON_BYTES } }),
+  )
+  async uploadIconSvga(@UploadedFile() file?: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException({
+        code: 'FILE_REQUIRED',
+        message: 'File required',
+      });
+    }
+    const name = (file.originalname || '').toLowerCase();
+    if (!name.endsWith('.svga')) {
+      throw new BadRequestException({
+        code: 'INVALID_FILE_TYPE',
+        message: 'File must have .svga extension',
+        details: { received: name },
+      });
+    }
+    return this.honors.uploadIconSvga(file.buffer);
   }
 
   // -------- Per-user grant / revoke --------

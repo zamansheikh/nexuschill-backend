@@ -12,7 +12,9 @@ import {
   GrantHonorDto,
   UpdateHonorItemDto,
 } from './dto/honors.dto';
+import { MediaService } from '../media/media.service';
 import {
+  HonorAssetType,
   HonorCategory,
   HonorItem,
   HonorItemDocument,
@@ -51,7 +53,41 @@ export class HonorsService {
     private readonly itemModel: Model<HonorItemDocument>,
     @InjectModel(UserHonor.name)
     private readonly userHonorModel: Model<UserHonorDocument>,
+    private readonly media: MediaService,
   ) {}
+
+  // ============== Asset uploads ==============
+
+  /// Upload a static image icon. Returns Cloudinary URL + publicId.
+  /// Mirrors `cosmetics.service.ts` so admins use the same picker UX.
+  async uploadIconImage(
+    buffer: Buffer,
+  ): Promise<{ url: string; publicId: string; assetType: HonorAssetType }> {
+    const res = await this.media.uploadImage(buffer, {
+      folder: 'honors/icons',
+    });
+    return {
+      url: res.secure_url,
+      publicId: res.public_id,
+      assetType: HonorAssetType.IMAGE,
+    };
+  }
+
+  /// Upload an SVGA animated icon. Cloudinary stores SVGA as
+  /// `resource_type: raw` (binary blob with no transcoding).
+  async uploadIconSvga(
+    buffer: Buffer,
+  ): Promise<{ url: string; publicId: string; assetType: HonorAssetType }> {
+    const res = await this.media.uploadAsset(buffer, {
+      folder: 'honors/svga',
+      resourceType: 'raw',
+    });
+    return {
+      url: res.secure_url,
+      publicId: res.public_id,
+      assetType: HonorAssetType.SVGA,
+    };
+  }
 
   // ============== Catalog ==============
 
@@ -116,6 +152,7 @@ export class HonorsService {
       category: input.category ?? HonorCategory.MEDAL,
       iconUrl: input.iconUrl ?? '',
       iconPublicId: input.iconPublicId ?? '',
+      iconAssetType: input.iconAssetType ?? HonorAssetType.IMAGE,
       maxTier: input.maxTier ?? 5,
       sortOrder: input.sortOrder ?? 0,
       active: input.active ?? true,
@@ -133,6 +170,9 @@ export class HonorsService {
     if (update.iconUrl !== undefined) item.iconUrl = update.iconUrl;
     if (update.iconPublicId !== undefined) {
       item.iconPublicId = update.iconPublicId;
+    }
+    if (update.iconAssetType !== undefined) {
+      item.iconAssetType = update.iconAssetType;
     }
     if (update.maxTier !== undefined) item.maxTier = update.maxTier;
     if (update.sortOrder !== undefined) item.sortOrder = update.sortOrder;
@@ -169,6 +209,7 @@ export class HonorsService {
           description: (item as any).description ?? '',
           category: item.category,
           iconUrl: item.iconUrl ?? '',
+          iconAssetType: item.iconAssetType ?? HonorAssetType.IMAGE,
           maxTier: item.maxTier,
           tier: r.tier,
           source: r.source,

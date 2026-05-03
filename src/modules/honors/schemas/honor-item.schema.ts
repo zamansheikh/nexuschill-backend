@@ -19,6 +19,15 @@ export enum HonorCategory {
   SPECIAL = 'special',
 }
 
+/// What kind of asset the icon is. Drives the renderer on the
+/// mobile side: static images go through CachedNetworkImage; SVGA
+/// goes through the SVGA player so the badge animates. Defaults to
+/// IMAGE for backwards compat with rows created before SVGA shipped.
+export enum HonorAssetType {
+  IMAGE = 'image',
+  SVGA = 'svga',
+}
+
 /**
  * Catalog row for one honor / achievement badge.
  *
@@ -55,12 +64,22 @@ export class HonorItem {
   @Prop({ type: String, enum: HonorCategory, default: HonorCategory.MEDAL, index: true })
   category!: HonorCategory;
 
-  /** PNG / SVG of the badge artwork. Hosted on Cloudinary. */
+  /** Cloudinary URL for the icon. Static image or SVGA file
+   *  depending on `iconAssetType`. */
   @Prop({ type: String, default: '' })
   iconUrl!: string;
 
   @Prop({ type: String, default: '' })
   iconPublicId!: string;
+
+  /** Whether `iconUrl` points to a static image or an SVGA animation.
+   *  Defaults to IMAGE so existing rows render without a migration. */
+  @Prop({
+    type: String,
+    enum: HonorAssetType,
+    default: HonorAssetType.IMAGE,
+  })
+  iconAssetType!: HonorAssetType;
 
   /** Number of upgrade tiers this honor supports — 1..5 stars. The
    *  current tier of a user is stored on UserHonor.tier. */

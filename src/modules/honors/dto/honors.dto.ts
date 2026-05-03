@@ -12,7 +12,10 @@ import {
   MinLength,
 } from 'class-validator';
 
-import { HonorCategory } from '../schemas/honor-item.schema';
+import {
+  HonorAssetType,
+  HonorCategory,
+} from '../schemas/honor-item.schema';
 
 export class CreateHonorItemDto {
   @IsString()
@@ -44,6 +47,10 @@ export class CreateHonorItemDto {
   @IsOptional()
   @IsString()
   iconPublicId?: string;
+
+  @IsOptional()
+  @IsEnum(HonorAssetType)
+  iconAssetType?: HonorAssetType;
 
   @IsOptional()
   @IsInt()
@@ -83,6 +90,10 @@ export class UpdateHonorItemDto {
   @IsOptional()
   @IsString()
   iconPublicId?: string;
+
+  @IsOptional()
+  @IsEnum(HonorAssetType)
+  iconAssetType?: HonorAssetType;
 
   @IsOptional()
   @IsInt()
