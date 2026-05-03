@@ -518,8 +518,11 @@ export class RocketService {
     }
 
     // 3. Credit wallets. Idempotency keys are deterministic per
-    //    (state, level, userId) so a retry of the same launch never
-    //    double-credits.
+    //    (state, launchSeq, level, userId) so a retry of the same launch
+    //    never double-credits, BUT a wrap-around launch of the same
+    //    level later in the day uses a distinct seq and thus distinct
+    //    idempotency keys — so the user gets their fresh reward.
+    const launchSeq = state.launches.length;
     for (const t of top) {
       if (t.coinsAwarded <= 0) continue;
       try {
@@ -528,7 +531,7 @@ export class RocketService {
           amount: t.coinsAwarded,
           type: TxnType.ROCKET_REWARD,
           description: `Rocket Top-${t.rank} (Lv.${lv.level})`,
-          idempotencyKey: `rocket:top:${state._id.toString()}:${lv.level}:${t.userId.toString()}`,
+          idempotencyKey: `rocket:top:${state._id.toString()}:${launchSeq}:${lv.level}:${t.userId.toString()}`,
           refType: 'rocket',
           refId: state._id.toString(),
         });
@@ -546,7 +549,7 @@ export class RocketService {
           amount: r.coinsAwarded,
           type: TxnType.ROCKET_REWARD,
           description: `Rocket random reward (Lv.${lv.level})`,
-          idempotencyKey: `rocket:rand:${state._id.toString()}:${lv.level}:${r.userId.toString()}`,
+          idempotencyKey: `rocket:rand:${state._id.toString()}:${launchSeq}:${lv.level}:${r.userId.toString()}`,
           refType: 'rocket',
           refId: state._id.toString(),
         });
@@ -558,12 +561,22 @@ export class RocketService {
     }
 
     // 4. Advance state — append the launch record, carry the residual
-    //    energy over to the next level (so a single big gift can chain
-    //    multiple launches), bump the level (or mark COMPLETE if there's
-    //    no next level).
+    //    energy over to the next level. When the last level launches we
+    //    WRAP AROUND to L1 so the rocket keeps cycling all day; a huge
+    //    single gift can ride past the top of the ladder and start a
+    //    fresh round, bringing whatever's left over with it.
     const launchedAt = new Date();
-    const isLastLevel = !config.levels.find((l) => l.level === lv.level + 1);
+    const sortedLevels = [...config.levels].sort((a, b) => a.level - b.level);
+    const currentIdx = sortedLevels.findIndex((l) => l.level === lv.level);
+    const isLastLevel = currentIdx >= sortedLevels.length - 1;
     const residualEnergy = Math.max(0, state.currentEnergy - lv.energyRequired);
+    // Sequential next level, or wrap to the first level if we just
+    // launched the last one. `nextLv` is non-null whenever there's at
+    // least one configured level (which we already verified above).
+    const nextLv = isLastLevel
+      ? sortedLevels[0]
+      : sortedLevels[currentIdx + 1];
+
     const launchRecord = {
       level: lv.level,
       launchedAt,
@@ -572,28 +585,26 @@ export class RocketService {
     };
 
     // Decide whether to immediately queue the NEXT level for cascade
-    // launch. Only relevant if there's another level configured AND the
-    // residual energy already crosses its threshold. The cascade fires
-    // `cascadeDelaySeconds` after THIS launch (config-tunable, default 30s).
+    // launch. The cascade fires `cascadeDelaySeconds` after THIS launch
+    // (config-tunable, default 30s). Wrap-around launches qualify too —
+    // a 1M coin gift on a 100K+300K+500K ladder will fire L1, L2, L3,
+    // then cascade L1 again with the leftover 100K.
     let cascadeQueued = false;
     let cascadeCountdownStartedAt: Date | null = null;
     let cascadeNextLevel: number | null = null;
-    if (!isLastLevel) {
-      const nextLv = config.levels.find((l) => l.level === lv.level + 1);
-      if (nextLv && residualEnergy >= nextLv.energyRequired) {
-        // Schedule the cascade: the sweeper fires when
-        //   countdownStartedAt + launchCountdownSeconds <= now,
-        // so we set it back-dated such that the *due* time lands exactly
-        // `cascadeDelaySeconds` after THIS launch finished.
-        const cascadeDueAt = new Date(
-          launchedAt.getTime() + config.cascadeDelaySeconds * 1000,
-        );
-        cascadeCountdownStartedAt = new Date(
-          cascadeDueAt.getTime() - config.launchCountdownSeconds * 1000,
-        );
-        cascadeQueued = true;
-        cascadeNextLevel = nextLv.level;
-      }
+    if (nextLv && residualEnergy >= nextLv.energyRequired) {
+      // The sweeper fires when
+      //   countdownStartedAt + launchCountdownSeconds <= now,
+      // so we set it back-dated such that the *due* time lands exactly
+      // `cascadeDelaySeconds` after THIS launch finished.
+      const cascadeDueAt = new Date(
+        launchedAt.getTime() + config.cascadeDelaySeconds * 1000,
+      );
+      cascadeCountdownStartedAt = new Date(
+        cascadeDueAt.getTime() - config.launchCountdownSeconds * 1000,
+      );
+      cascadeQueued = true;
+      cascadeNextLevel = nextLv.level;
     }
 
     await this.stateModel
@@ -601,13 +612,11 @@ export class RocketService {
         { _id: state._id, status: RocketStatus.COUNTDOWN },
         {
           $set: {
-            status: isLastLevel
-              ? RocketStatus.COMPLETE
-              : cascadeQueued
-                ? RocketStatus.COUNTDOWN
-                : RocketStatus.IDLE,
-            currentLevel: isLastLevel ? lv.level : lv.level + 1,
-            currentEnergy: isLastLevel ? 0 : residualEnergy,
+            status: cascadeQueued
+              ? RocketStatus.COUNTDOWN
+              : RocketStatus.IDLE,
+            currentLevel: nextLv.level,
+            currentEnergy: residualEnergy,
             countdownStartedAt: cascadeQueued
               ? cascadeCountdownStartedAt
               : null,
@@ -638,29 +647,25 @@ export class RocketService {
           userId: r.userId.toString(),
           coinsAwarded: r.coinsAwarded,
         })),
-        nextLevel: isLastLevel ? null : lv.level + 1,
+        nextLevel: nextLv.level,
+        wrapped: isLastLevel,
       },
     );
 
     // Live fuel update for the new level — gauge resets to the residual.
-    if (!isLastLevel) {
-      const nextLv = config.levels.find((l) => l.level === lv.level + 1);
-      if (nextLv) {
-        void this.realtime.emitToRoom(
-          roomIdStr,
-          RealtimeEventType.ROOM_ROCKET_FUEL,
-          {
-            roomId: roomIdStr,
-            level: nextLv.level,
-            currentEnergy: residualEnergy,
-            energyRequired: nextLv.energyRequired,
-            status: cascadeQueued
-              ? RocketStatus.COUNTDOWN
-              : RocketStatus.IDLE,
-          },
-        );
-      }
-    }
+    void this.realtime.emitToRoom(
+      roomIdStr,
+      RealtimeEventType.ROOM_ROCKET_FUEL,
+      {
+        roomId: roomIdStr,
+        level: nextLv.level,
+        currentEnergy: residualEnergy,
+        energyRequired: nextLv.energyRequired,
+        status: cascadeQueued
+          ? RocketStatus.COUNTDOWN
+          : RocketStatus.IDLE,
+      },
+    );
 
     // Cascade banner — countdown event so the mobile flips its overlay
     // to "Launching Lv.N+1 in X..." with the correct wait time.

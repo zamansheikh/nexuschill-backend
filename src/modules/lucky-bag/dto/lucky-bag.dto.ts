@@ -76,4 +76,12 @@ export class UpdateLuckyBagConfigDto {
   @ValidateNested({ each: true })
   @Type(() => LuckyBagTierDto)
   tiers?: LuckyBagTierDto[];
+
+  @IsOptional()
+  @IsBoolean()
+  composerShowDistributionMode?: boolean;
+
+  @IsOptional()
+  @IsEnum(LuckyBagDistributionMode)
+  composerDefaultDistributionMode?: LuckyBagDistributionMode;
 }

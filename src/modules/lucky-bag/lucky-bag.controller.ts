@@ -43,6 +43,8 @@ export class LuckyBagController {
       applyCommissionByDefault: config.applyCommissionByDefault,
       coinPresets: config.coinPresets,
       tiers: config.tiers,
+      composerShowDistributionMode: config.composerShowDistributionMode,
+      composerDefaultDistributionMode: config.composerDefaultDistributionMode,
     };
   }
 

@@ -1,6 +1,8 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
 
+import { LuckyBagDistributionMode } from './lucky-bag.schema';
+
 export type LuckyBagConfigDocument = HydratedDocument<LuckyBagConfig>;
 
 /**
@@ -67,6 +69,27 @@ export class LuckyBagConfig {
 
   @Prop({ type: [LuckyBagTierSchema], default: [] })
   tiers!: LuckyBagTier[];
+
+  /**
+   * When true, the mobile composer shows the random/fixed-tier picker
+   * and the user chooses. When false, the picker is hidden and the
+   * server forces `composerDefaultDistributionMode` regardless of what
+   * the client sends.
+   */
+  @Prop({ type: Boolean, default: true })
+  composerShowDistributionMode!: boolean;
+
+  /**
+   * The mode used when the picker is hidden, AND the pre-selected mode
+   * shown when it's visible. Server enforces this for hidden-picker
+   * configs even if the client tries to override.
+   */
+  @Prop({
+    type: String,
+    enum: LuckyBagDistributionMode,
+    default: LuckyBagDistributionMode.RANDOM,
+  })
+  composerDefaultDistributionMode!: LuckyBagDistributionMode;
 }
 
 export const LuckyBagConfigSchema = SchemaFactory.createForClass(LuckyBagConfig);

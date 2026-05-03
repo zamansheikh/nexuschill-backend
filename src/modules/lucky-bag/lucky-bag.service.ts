@@ -144,6 +144,8 @@ export class LuckyBagService {
     applyCommissionByDefault?: boolean;
     coinPresets?: number[];
     tiers?: LuckyBagTier[];
+    composerShowDistributionMode?: boolean;
+    composerDefaultDistributionMode?: LuckyBagDistributionMode;
   }): Promise<LuckyBagConfigDocument> {
     if (update.commissionRate !== undefined) {
       if (update.commissionRate < 0 || update.commissionRate > 1) {
@@ -198,6 +200,13 @@ export class LuckyBagService {
     if (update.tiers !== undefined) {
       // Sort by slotCount ascending so the admin UI gets a stable order.
       set.tiers = [...update.tiers].sort((a, b) => a.slotCount - b.slotCount);
+    }
+    if (update.composerShowDistributionMode !== undefined) {
+      set.composerShowDistributionMode = update.composerShowDistributionMode;
+    }
+    if (update.composerDefaultDistributionMode !== undefined) {
+      set.composerDefaultDistributionMode =
+        update.composerDefaultDistributionMode;
     }
 
     return this.configModel
@@ -348,7 +357,17 @@ export class LuckyBagService {
         message: 'Lucky Bag is currently disabled.',
       });
     }
-    const mode = input.distributionMode ?? LuckyBagDistributionMode.RANDOM;
+    // Distribution-mode policy. When the admin has hidden the picker,
+    // the server forces `composerDefaultDistributionMode` regardless of
+    // what the client sent — keeps mobile honest if it tries to override
+    // a hidden picker. When the picker IS visible, the user's choice
+    // (or the default if they didn't send one) is used.
+    const mode = config.composerShowDistributionMode
+      ? (input.distributionMode ??
+          config.composerDefaultDistributionMode ??
+          LuckyBagDistributionMode.RANDOM)
+      : (config.composerDefaultDistributionMode ??
+          LuckyBagDistributionMode.RANDOM);
     if (mode === LuckyBagDistributionMode.FIXED_TIER) {
       const tier = config.tiers.find((t) => t.slotCount === input.slotCount);
       if (!tier) {
