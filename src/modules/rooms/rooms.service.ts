@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 
 import { AgoraService } from '../agora/agora.service';
 import { RtcRoleDto } from '../agora/dto/agora.dto';
@@ -324,7 +324,7 @@ export class RoomsService implements OnModuleInit {
         .exec(),
       this.userModel
         .findById(room.ownerId)
-        .select('username displayName avatarUrl numericId level isHost')
+        .select('username displayName avatarUrl numericId level isHost country')
         .exec(),
       // Per-receiver diamond totals scoped to this room. Drives the
       // diamond badge under each seated user. The realtime layer keeps
@@ -1549,5 +1549,83 @@ export class RoomsService implements OnModuleInit {
         .exec(),
     ]);
     return room;
+  }
+
+  /**
+   * Reverse `adminRemove` — flip REMOVED back to ACTIVE so an
+   * accidentally-removed room can be brought back without the owner
+   * having to re-create it. Clears the removal trace fields too,
+   * because keeping a `removedBy/Reason` on an ACTIVE room is
+   * misleading. Idempotent on already-ACTIVE rooms.
+   */
+  async adminRestore(roomId: string) {
+    const room = await this.getOrThrow(roomId);
+    if (room.status === RoomStatus.ACTIVE) return room;
+    room.status = RoomStatus.ACTIVE;
+    room.removedReason = '';
+    room.removedBy = null;
+    await room.save();
+    return room;
+  }
+
+  /**
+   * Admin list — separate from `listLive` because admins need to see
+   * CLOSED / REMOVED rooms too, search by name + numericId, and
+   * filter by ownerCountry. Sorted by `createdAt` desc so the newest
+   * rooms surface first; admins can flip to `liveAt` for "what's
+   * popping right now" once we wire a sort param.
+   */
+  async adminList(params: {
+    page?: number;
+    limit?: number;
+    status?: RoomStatus;
+    country?: string;
+    search?: string;
+  }) {
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(100, Math.max(1, params.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const filter: FilterQuery<RoomDocument> = {};
+    if (params.status) filter.status = params.status;
+    if (params.country && params.country.length === 2) {
+      filter.ownerCountry = params.country.toUpperCase();
+    }
+    if (params.search && params.search.trim().length > 0) {
+      const q = params.search.trim();
+      // Numeric search → match exact public id; otherwise treat as a
+      // name fragment (case-insensitive). Anchor-free regex keeps the
+      // common "starts with" UX without making admins type a wildcard.
+      const asNumber = Number(q);
+      if (!Number.isNaN(asNumber) && Number.isFinite(asNumber)) {
+        filter.$or = [
+          { numericId: asNumber },
+          { name: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
+        ];
+      } else {
+        filter.name = {
+          $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+          $options: 'i',
+        };
+      }
+    }
+
+    const [items, total] = await Promise.all([
+      this.roomModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('ownerId', 'username displayName avatarUrl numericId country')
+        .exec(),
+      this.roomModel.countDocuments(filter).exec(),
+    ]);
+
+    return {
+      items: items.map((r) => r.toJSON()),
+      page,
+      limit,
+      total,
+    };
   }
 }
