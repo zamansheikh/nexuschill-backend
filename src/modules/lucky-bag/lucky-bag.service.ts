@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -99,6 +100,8 @@ interface CreateLuckyBagInput {
 
 @Injectable()
 export class LuckyBagService {
+  private readonly log = new Logger('LuckyBagService');
+
   constructor(
     @InjectModel(LuckyBag.name)
     private readonly bagModel: Model<LuckyBagDocument>,
@@ -315,14 +318,25 @@ export class LuckyBagService {
   }
 
   /** Active bags in a room — used when a user joins, to render any
-   *  in-flight cards they might have missed. */
+   *  in-flight cards they might have missed. Filters by both `expiresAt`
+   *  AND an effective expiry of `availableAt + claimWindowSeconds`, so
+   *  old bags created with a long lifetime (24h before the timing
+   *  config landed) drop out of the active list once their actual
+   *  claim window has passed. */
   async listActiveInRoom(roomId: string) {
     if (!Types.ObjectId.isValid(roomId)) return [];
+    const config = await this.getConfig();
+    const claimWindow = config.claimWindowSeconds ?? 30;
+    const now = new Date();
+    const effectiveAvailableCutoff = new Date(
+      now.getTime() - claimWindow * 1000,
+    );
     return this.bagModel
       .find({
         roomId: new Types.ObjectId(roomId),
         status: LuckyBagStatus.PENDING,
-        expiresAt: { $gt: new Date() },
+        expiresAt: { $gt: now },
+        availableAt: { $gt: effectiveAvailableCutoff },
       })
       .sort({ createdAt: -1 })
       .limit(20)
@@ -372,13 +386,20 @@ export class LuckyBagService {
     // Concurrent-bag cap. Default 1 — only one active bag per room at
     // a time, mirrors the in-app expectation that you wait for the
     // current bag to finish before dropping another. Admin can raise
-    // this in `/lucky-bag` config if multi-drop UX ever lands.
+    // this in `/lucky-bag` config if multi-drop UX ever lands. The
+    // effective-expiry filter prevents stuck old bags (created with a
+    // long lifetime) from blocking new drops past their claim window.
     const maxConcurrent = config.maxConcurrentPerRoom ?? 1;
+    const claimWindow = config.claimWindowSeconds ?? 30;
+    const nowForCap = new Date();
     const activeCount = await this.bagModel
       .countDocuments({
         roomId: new Types.ObjectId(input.roomId),
         status: LuckyBagStatus.PENDING,
-        expiresAt: { $gt: new Date() },
+        expiresAt: { $gt: nowForCap },
+        availableAt: {
+          $gt: new Date(nowForCap.getTime() - claimWindow * 1000),
+        },
       })
       .exec();
     if (activeCount >= maxConcurrent) {
@@ -695,6 +716,108 @@ export class LuckyBagService {
       slotIndex: myClaim.slotIndex,
       bag: updated,
     };
+  }
+
+  // ============================================================
+  // Cancel — sender drops a still-pending bag
+  // ============================================================
+
+  /**
+   * Sender-initiated cancellation. Marks the bag EXPIRED, refunds the
+   * unclaimed remainder back to the sender's wallet, and emits a
+   * realtime event so every client drops the floating card.
+   *
+   * This is the escape hatch for stuck bags created with an older
+   * lifetime config (before `claimWindowSeconds` landed) — the sender
+   * can clear them and drop a fresh bag. Anyone other than the sender
+   * gets `NOT_BAG_OWNER`.
+   */
+  async cancel(bagId: string, userId: string) {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user',
+      });
+    }
+    const userOid = new Types.ObjectId(userId);
+    const bag = await this.getByIdOrThrow(bagId);
+
+    if (!bag.senderId.equals(userOid)) {
+      throw new ForbiddenException({
+        code: 'NOT_BAG_OWNER',
+        message: 'Only the sender can cancel this Lucky Bag.',
+      });
+    }
+    if (bag.status !== LuckyBagStatus.PENDING) {
+      throw new ConflictException({
+        code: 'BAG_NOT_PENDING',
+        message: 'This Lucky Bag is no longer cancellable.',
+      });
+    }
+
+    // Compute refund: unclaimed slots × their preset amounts. Claimed
+    // slots are not refunded — recipients keep their share.
+    const claimedAmount = bag.claims.reduce((s, c) => s + c.amount, 0);
+    const refundAmount = Math.max(0, bag.totalCoins - claimedAmount);
+
+    // Atomic flip: only succeed if still PENDING. Avoids races with
+    // last-claim-arrives-during-cancel.
+    const updated = await this.bagModel
+      .findOneAndUpdate(
+        { _id: bag._id, status: LuckyBagStatus.PENDING },
+        { $set: { status: LuckyBagStatus.EXPIRED, expiresAt: new Date() } },
+        { new: true },
+      )
+      .exec();
+    if (!updated) {
+      throw new ConflictException({
+        code: 'BAG_NOT_PENDING',
+        message: 'Bag was claimed or expired before cancellation took effect.',
+      });
+    }
+
+    // Refund the sender — only if there's something left to give back.
+    // Idempotent on (bagId, sender) so a retry of the same cancel never
+    // double-refunds.
+    if (refundAmount > 0) {
+      try {
+        await this.wallet.credit(Currency.COINS, {
+          userId,
+          amount: refundAmount,
+          type: TxnType.LUCKY_BAG_REFUND,
+          description: `Lucky Bag refund (cancelled)`,
+          idempotencyKey: `lucky-bag:cancel:${updated._id.toString()}:${userId}`,
+          refType: 'lucky_bag',
+          refId: updated._id.toString(),
+          performedBy: userId,
+        });
+      } catch (err: any) {
+        this.log.error(
+          `Refund failed for cancelled bag ${updated._id}: ${err?.message ?? err}`,
+        );
+      }
+    }
+
+    // Broadcast — every client treats slotsTaken === slotCount as
+    // "remove the floating card", so we set it to slotCount to drop the
+    // card on cancel. We also include `cancelled: true` so future UI
+    // can surface a different toast if desired.
+    if (updated.roomId) {
+      void this.realtime.emitToRoom(
+        updated.roomId.toString(),
+        RealtimeEventType.ROOM_LUCKY_BAG_CLAIMED,
+        {
+          bagId: updated._id.toString(),
+          slotsTaken: updated.slotCount,
+          slotCount: updated.slotCount,
+          status: updated.status,
+          cancelled: true,
+          refundAmount,
+        },
+      );
+    }
+
+    return { refundAmount };
   }
 
   // ============================================================

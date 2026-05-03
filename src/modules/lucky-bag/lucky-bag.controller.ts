@@ -101,6 +101,19 @@ export class LuckyBagController {
     return this.svc.claim(id, current.userId);
   }
 
+  /** Sender-only cancel — refunds the unclaimed remainder back to the
+   *  sender's wallet and emits a realtime event so every client drops
+   *  the floating card. Used as the escape hatch for stuck bags AND
+   *  general "I changed my mind" UX. */
+  @Post(':id/cancel')
+  @HttpCode(HttpStatus.OK)
+  async cancel(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.svc.cancel(id, current.userId);
+  }
+
   /** Bags the caller has SENT — used on the History → Sent tab. */
   @Get('me/sent')
   async listMySent(
