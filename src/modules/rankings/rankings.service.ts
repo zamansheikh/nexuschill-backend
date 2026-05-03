@@ -3,6 +3,15 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
 import {
+  Family,
+  FamilyDocument,
+} from '../families/schemas/family.schema';
+import {
+  FamilyMember,
+  FamilyMemberDocument,
+  FamilyMemberStatus,
+} from '../families/schemas/family-member.schema';
+import {
   GiftContext,
   GiftEvent,
   GiftEventDocument,
@@ -10,7 +19,7 @@ import {
 import { Room, RoomDocument } from '../rooms/schemas/room.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 
-export type RankingCategory = 'honor' | 'charm' | 'room';
+export type RankingCategory = 'honor' | 'charm' | 'room' | 'family';
 export type RankingPeriod = 'daily' | 'weekly' | 'monthly';
 
 export interface RankingEntry {
@@ -68,6 +77,10 @@ export class RankingsService {
     private readonly giftEventModel: Model<GiftEventDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
+    @InjectModel(Family.name)
+    private readonly familyModel: Model<FamilyDocument>,
+    @InjectModel(FamilyMember.name)
+    private readonly familyMemberModel: Model<FamilyMemberDocument>,
   ) {}
 
   async list(
@@ -75,10 +88,10 @@ export class RankingsService {
     period: RankingPeriod,
     callerUserId: string,
   ): Promise<RankingResult> {
-    if (!['honor', 'charm', 'room'].includes(category)) {
+    if (!['honor', 'charm', 'room', 'family'].includes(category)) {
       throw new BadRequestException({
         code: 'INVALID_CATEGORY',
-        message: 'category must be honor / charm / room',
+        message: 'category must be honor / charm / room / family',
       });
     }
     if (!['daily', 'weekly', 'monthly'].includes(period)) {
@@ -89,10 +102,17 @@ export class RankingsService {
     }
 
     const { start, end } = this.windowFor(period);
-    const items =
-      category === 'room'
-        ? await this.computeRoomRanking(start, end)
-        : await this.computeUserRanking(category, start, end);
+    const items = await (() => {
+      switch (category) {
+        case 'room':
+          return this.computeRoomRanking(start, end);
+        case 'family':
+          return this.computeFamilyRanking(start, end);
+        case 'honor':
+        case 'charm':
+          return this.computeUserRanking(category, start, end);
+      }
+    })();
     const callerEntry = await this.computeCallerEntry(
       category,
       start,
@@ -216,6 +236,97 @@ export class RankingsService {
     });
   }
 
+  /**
+   * Family ranking — sums every active family member's diamonds-
+   * received in the window, then groups by family. The "family
+   * transaction" definition matches what users see in the Family tab:
+   * member earnings count toward the family's pot, so a family of
+   * active hosts climbs faster than a family of pure spenders. (The
+   * symmetric measure — total coins SPENT by members — could ship as
+   * a parallel metric later; one number per family is enough for v1.)
+   *
+   * Implementation: single aggregation pipeline. The $lookup against
+   * `family_members` is the heaviest step; we keep it cheap by
+   * matching only `status: ACTIVE` members and by sourcing the join
+   * key from an already-grouped intermediate (one row per active
+   * receiver) rather than from raw gift events.
+   */
+  private async computeFamilyRanking(
+    start: Date,
+    end: Date,
+  ): Promise<RankingEntry[]> {
+    const rows = await this.giftEventModel.aggregate<{
+      _id: Types.ObjectId;
+      value: number;
+    }>([
+      {
+        $match: {
+          status: 'completed',
+          createdAt: { $gte: start, $lte: end },
+        },
+      },
+      // Roll up per-receiver first to shrink the join input. A single
+      // user receives many gift events; we only need their period
+      // total to forward into the family aggregation.
+      {
+        $group: { _id: '$receiverId', total: { $sum: '$totalDiamondReward' } },
+      },
+      { $match: { total: { $gt: 0 } } },
+      // Join to the user's active family membership. Users in no
+      // family fall out of `$lookup` with empty array → dropped by
+      // the next $unwind.
+      {
+        $lookup: {
+          from: this.familyMemberModel.collection.name,
+          let: { uid: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ['$userId', '$$uid'] },
+                status: FamilyMemberStatus.ACTIVE,
+              },
+            },
+            { $project: { familyId: 1 } },
+          ],
+          as: 'membership',
+        },
+      },
+      { $unwind: '$membership' },
+      {
+        $group: {
+          _id: '$membership.familyId',
+          value: { $sum: '$total' },
+        },
+      },
+      { $match: { value: { $gt: 0 } } },
+      { $sort: { value: -1 } },
+      { $limit: 100 },
+    ]);
+
+    if (rows.length === 0) return [];
+
+    const families = await this.familyModel
+      .find({ _id: { $in: rows.map((r) => r._id) } })
+      .select('name numericId coverUrl level')
+      .lean()
+      .exec();
+    const byId = new Map(families.map((f) => [f._id.toString(), f]));
+
+    return rows.map((r, i) => {
+      const fam = byId.get(r._id.toString());
+      return {
+        id: r._id.toString(),
+        rank: i + 1,
+        value: r.value,
+        displayName: fam?.name ?? 'Family',
+        username: null,
+        numericId: fam?.numericId ?? null,
+        avatarUrl: fam?.coverUrl ?? '',
+        level: fam?.level ?? 1,
+      };
+    });
+  }
+
   // ============== Caller's own rank ==============
 
   private async computeCallerEntry(
@@ -249,6 +360,28 @@ export class RankingsService {
         end,
         'room',
         { contextType: GiftContext.ROOM },
+      );
+    }
+
+    if (category === 'family') {
+      // Caller's family rank = the rank of whichever family the caller
+      // is an active member of. Users with no membership get null.
+      const membership = await this.familyMemberModel
+        .findOne({
+          userId: new Types.ObjectId(callerUserId),
+          status: FamilyMemberStatus.ACTIVE,
+        })
+        .select('familyId')
+        .lean()
+        .exec();
+      if (!membership) return null;
+      const callerFamilyId = membership.familyId.toString();
+      if (topItems.some((it) => it.id === callerFamilyId)) return null;
+      return this.callerForFamily(
+        callerFamilyId,
+        new Types.ObjectId(callerFamilyId),
+        start,
+        end,
       );
     }
 
@@ -318,6 +451,93 @@ export class RankingsService {
     return this.hydrateCallerRow(callerSubjectId, callerValue, rank, category);
   }
 
+  /**
+   * Caller's-rank computation for the family category. Mirrors
+   * `callerForKey` but the value+beaters aggregations have to fan out
+   * through the same family-member $lookup the main pipeline uses —
+   * we can't just match on a single user-side field.
+   */
+  private async callerForFamily(
+    callerFamilyId: string,
+    callerFamilyOid: Types.ObjectId,
+    start: Date,
+    end: Date,
+  ): Promise<RankingEntry | null> {
+    // 1. The caller's family's total diamonds in the window. Same
+    //    shape as the main aggregation but limited to one family.
+    const sumAgg = await this.giftEventModel.aggregate<{ value: number }>([
+      {
+        $match: {
+          status: 'completed',
+          createdAt: { $gte: start, $lte: end },
+        },
+      },
+      {
+        $group: { _id: '$receiverId', total: { $sum: '$totalDiamondReward' } },
+      },
+      { $match: { total: { $gt: 0 } } },
+      {
+        $lookup: {
+          from: this.familyMemberModel.collection.name,
+          let: { uid: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ['$userId', '$$uid'] },
+                status: FamilyMemberStatus.ACTIVE,
+                familyId: callerFamilyOid,
+              },
+            },
+            { $project: { _id: 1 } },
+          ],
+          as: 'membership',
+        },
+      },
+      { $unwind: '$membership' },
+      { $group: { _id: null, value: { $sum: '$total' } } },
+    ]);
+    const callerValue = sumAgg[0]?.value ?? 0;
+    if (callerValue <= 0) {
+      return this.hydrateZeroCallerRow(callerFamilyId, 'family');
+    }
+
+    // 2. Count families that beat the caller's value in the window.
+    const beatersAgg = await this.giftEventModel.aggregate<{ count: number }>([
+      {
+        $match: {
+          status: 'completed',
+          createdAt: { $gte: start, $lte: end },
+        },
+      },
+      {
+        $group: { _id: '$receiverId', total: { $sum: '$totalDiamondReward' } },
+      },
+      { $match: { total: { $gt: 0 } } },
+      {
+        $lookup: {
+          from: this.familyMemberModel.collection.name,
+          let: { uid: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ['$userId', '$$uid'] },
+                status: FamilyMemberStatus.ACTIVE,
+              },
+            },
+            { $project: { familyId: 1 } },
+          ],
+          as: 'membership',
+        },
+      },
+      { $unwind: '$membership' },
+      { $group: { _id: '$membership.familyId', value: { $sum: '$total' } } },
+      { $match: { value: { $gt: callerValue } } },
+      { $count: 'count' },
+    ]);
+    const rank = (beatersAgg[0]?.count ?? 0) + 1;
+    return this.hydrateCallerRow(callerFamilyId, callerValue, rank, 'family');
+  }
+
   /** Caller has zero activity this window — still return a row so the
    *  sticky footer renders consistently. Rank `0` is the convention
    *  the mobile side reads as "100+". */
@@ -356,6 +576,24 @@ export class RankingsService {
         avatarUrl: room.coverUrl ?? owner?.avatarUrl ?? '',
         level: 0,
         ownerAvatarUrl: owner?.avatarUrl ?? null,
+      };
+    }
+    if (category === 'family') {
+      const fam = await this.familyModel
+        .findById(callerSubjectId)
+        .select('name numericId coverUrl level')
+        .lean()
+        .exec();
+      if (!fam) return null;
+      return {
+        id: callerSubjectId,
+        rank,
+        value,
+        displayName: fam.name ?? 'Family',
+        username: null,
+        numericId: fam.numericId ?? null,
+        avatarUrl: fam.coverUrl ?? '',
+        level: fam.level ?? 1,
       };
     }
     const u = await this.userModel
