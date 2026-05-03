@@ -9,7 +9,20 @@ import { FilterQuery, Model, Types } from 'mongoose';
 
 import { CounterScope } from '../common/schemas/counter.schema';
 import { NumericIdService } from '../common/numeric-id.service';
+import {
+  Family,
+  FamilyDocument,
+} from '../families/schemas/family.schema';
+import {
+  FamilyMember,
+  FamilyMemberDocument,
+  FamilyMemberStatus,
+} from '../families/schemas/family-member.schema';
 import { Room, RoomDocument } from '../rooms/schemas/room.schema';
+import {
+  UserSvipStatus,
+  UserSvipStatusDocument,
+} from '../svip/schemas/user-svip-status.schema';
 import {
   AuthProvider,
   HostTier,
@@ -37,8 +50,62 @@ export class UsersService {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
+    @InjectModel(Family.name)
+    private readonly familyModel: Model<FamilyDocument>,
+    @InjectModel(FamilyMember.name)
+    private readonly familyMemberModel: Model<FamilyMemberDocument>,
+    @InjectModel(UserSvipStatus.name)
+    private readonly svipStatusModel: Model<UserSvipStatusDocument>,
     private readonly numericIds: NumericIdService,
   ) {}
+
+  /**
+   * Resolve the data the mobile profile pages render *alongside* the
+   * core user fields: the user's family (if any) and SVIP tier.
+   * Both lookups are tiny and indexed; we run them in parallel and
+   * the controller embeds them onto the response. Either piece may
+   * be null when the user isn't in a family / hasn't earned SVIP.
+   */
+  async getProfileEnrichment(userId: string): Promise<{
+    family: { id: string; name: string; level: number } | null;
+    svipLevel: number;
+  }> {
+    if (!Types.ObjectId.isValid(userId)) {
+      return { family: null, svipLevel: 0 };
+    }
+    const userOid = new Types.ObjectId(userId);
+    const [membership, svipStatus] = await Promise.all([
+      this.familyMemberModel
+        .findOne({ userId: userOid, status: FamilyMemberStatus.ACTIVE })
+        .select('familyId')
+        .lean()
+        .exec(),
+      this.svipStatusModel
+        .findOne({ userId: userOid })
+        .select('currentLevel')
+        .lean()
+        .exec(),
+    ]);
+    let family: { id: string; name: string; level: number } | null = null;
+    if (membership) {
+      const fam = await this.familyModel
+        .findById(membership.familyId)
+        .select('name level')
+        .lean()
+        .exec();
+      if (fam) {
+        family = {
+          id: fam._id.toString(),
+          name: fam.name ?? '',
+          level: fam.level ?? 1,
+        };
+      }
+    }
+    return {
+      family,
+      svipLevel: svipStatus?.currentLevel ?? 0,
+    };
+  }
 
   async findById(id: string): Promise<UserDocument | null> {
     if (!Types.ObjectId.isValid(id)) return null;

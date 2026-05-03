@@ -37,13 +37,19 @@ export class UsersController {
   @Get('me')
   async me(@CurrentUser() current: AuthenticatedUser) {
     const user = await this.users.getByIdOrThrow(current.userId);
-    // Embed visitorsCount on the self response so the "Me" tab can
-    // render its three stat tiles in one request. followersCount /
+    // Embed visitorsCount + family + svipLevel on the self response
+    // so the "Me" tab and the self-as-public-profile flow can render
+    // the full tile strip in one request. followersCount /
     // followingCount come for free — they're denormalized fields on
     // the user doc.
-    const visitorsCount = await this.social.visitorsCount(current.userId);
+    const [visitorsCount, enrichment] = await Promise.all([
+      this.social.visitorsCount(current.userId),
+      this.users.getProfileEnrichment(current.userId),
+    ]);
     const json = user.toJSON() as Record<string, any>;
     json.visitorsCount = visitorsCount;
+    json.family = enrichment.family;
+    json.svipLevel = enrichment.svipLevel;
     return { user: json };
   }
 
@@ -135,17 +141,21 @@ export class UsersController {
   ) {
     const user = await this.users.getByIdOrThrow(id);
     const json = this.users.toPublic(user);
-    // `isFollowing` is the caller's perspective on this user — used
-    // by the mobile profile page + seat-actions sheet to render the
-    // Follow / Following toggle without a second round trip.
-    // Visitors count is included so the public profile renders the
-    // same three-tile stat strip the owner sees.
-    const [isFollowing, visitorsCount] = await Promise.all([
+    // Embed everything the mobile profile page needs for the visible
+    // tile strip + Follow toggle in a single round-trip:
+    //   • isFollowing — caller's perspective on this user.
+    //   • visitorsCount — same three-tile stat strip the owner sees.
+    //   • family — name + level for the "Family: …" line.
+    //   • svipLevel — drives the SVIP1..9 chip; 0 means hidden.
+    const [isFollowing, visitorsCount, enrichment] = await Promise.all([
       this.social.isFollowing(current.userId, id),
       this.social.visitorsCount(id),
+      this.users.getProfileEnrichment(id),
     ]);
     (json as Record<string, unknown>).isFollowing = isFollowing;
     (json as Record<string, unknown>).visitorsCount = visitorsCount;
+    (json as Record<string, unknown>).family = enrichment.family;
+    (json as Record<string, unknown>).svipLevel = enrichment.svipLevel;
     return { user: json };
   }
 

@@ -1,8 +1,20 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
+import {
+  Family,
+  FamilySchema,
+} from '../families/schemas/family.schema';
+import {
+  FamilyMember,
+  FamilyMemberSchema,
+} from '../families/schemas/family-member.schema';
 import { Room, RoomSchema } from '../rooms/schemas/room.schema';
 import { SocialModule } from '../social/social.module';
+import {
+  UserSvipStatus,
+  UserSvipStatusSchema,
+} from '../svip/schemas/user-svip-status.schema';
 import { User, UserSchema } from './schemas/user.schema';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
@@ -21,6 +33,14 @@ import { UsersService } from './users.service';
       // schema in two modules just gives both their own DI handle to
       // the same underlying model.
       { name: Room.name, schema: RoomSchema },
+      // Read-only access for profile enrichment (family name + SVIP
+      // tier embedded on `/users/me` and `/users/:id`). Same
+      // direct-Mongoose pattern as Room — avoids importing the full
+      // FamiliesModule / SvipModule and the cycle risk that comes
+      // with it.
+      { name: Family.name, schema: FamilySchema },
+      { name: FamilyMember.name, schema: FamilyMemberSchema },
+      { name: UserSvipStatus.name, schema: UserSvipStatusSchema },
     ]),
     // SocialModule is a leaf in our module graph — it imports User
     // schema via forFeature but NOT UsersModule, so this arrow is
