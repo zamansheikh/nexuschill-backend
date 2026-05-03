@@ -605,6 +605,78 @@ export class RoomsService {
     return { ok: true };
   }
 
+  // ============== Member listing ==============
+
+  /**
+   * Active member roster for a room — drives the "Online Users" bottom
+   * sheet. Joined-most-recently first; owner row is force-pinned to the
+   * top regardless of join time so the host is visually anchored. Each
+   * row carries the user's display info + their level (computed from
+   * the user's `experience` if your User schema tracks XP; fall back
+   * to numericId-based bucket otherwise).
+   */
+  async listMembers(roomId: string) {
+    if (!Types.ObjectId.isValid(roomId)) {
+      throw new BadRequestException({
+        code: 'INVALID_ROOM_ID',
+        message: 'Invalid room id',
+      });
+    }
+    const room = await this.getOrThrow(roomId);
+
+    const members = await this.memberModel
+      .find({ roomId: room._id })
+      .sort({ lastSeenAt: -1 })
+      .populate(
+        'userId',
+        'username displayName avatarUrl numericId level experience',
+      )
+      .lean()
+      .exec();
+
+    const items = members.map((m) => {
+      const user = m.userId as unknown as {
+        _id: Types.ObjectId;
+        username?: string;
+        displayName?: string;
+        avatarUrl?: string;
+        numericId?: number | null;
+        level?: number | null;
+        experience?: number | null;
+      } | null;
+      return {
+        id: m._id.toString(),
+        userId: user?._id.toString() ?? '',
+        role: m.role,
+        joinedAt: m.joinedAt,
+        lastSeenAt: m.lastSeenAt,
+        user: user
+          ? {
+              id: user._id.toString(),
+              displayName: user.displayName ?? '',
+              username: user.username ?? '',
+              avatarUrl: user.avatarUrl ?? '',
+              numericId: user.numericId ?? null,
+              level: user.level ?? 1,
+            }
+          : null,
+      };
+    });
+
+    // Pin the owner to the top — typical "host first" convention.
+    items.sort((a, b) => {
+      if (a.role === 'owner' && b.role !== 'owner') return -1;
+      if (b.role === 'owner' && a.role !== 'owner') return 1;
+      return 0;
+    });
+
+    return {
+      roomId: room._id.toString(),
+      total: items.length,
+      items,
+    };
+  }
+
   // ============== Seat actions ==============
 
   /** Take a specific empty seat. Returns a fresh publisher RTC token. */

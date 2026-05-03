@@ -312,6 +312,15 @@ export class RoomsController {
 
   // ---------- Gift transaction history ----------
 
+  /// Active member roster — drives the "Online Users" bottom sheet
+  /// that opens when the user taps the room's viewer-count widget.
+  /// Owner is pinned to the top regardless of join time.
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/members')
+  async listMembers(@Param('id') id: string) {
+    return this.rooms.listMembers(id);
+  }
+
   /// All gifts ever sent in this room. Anyone can read; auth required so
   /// scrapers don't enumerate the gift ledger.
   @UseGuards(JwtAuthGuard)
