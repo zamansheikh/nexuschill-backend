@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -57,7 +58,7 @@ function channelNameFor(room: RoomDocument): string {
 }
 
 @Injectable()
-export class RoomsService {
+export class RoomsService implements OnModuleInit {
   private readonly logger = new Logger(RoomsService.name);
 
   constructor(
@@ -77,6 +78,77 @@ export class RoomsService {
     private readonly magicBall: MagicBallService,
     private readonly fcm: FcmService,
   ) {}
+
+  /**
+   * Backfill `ownerCountry` for rooms that were created before the
+   * field existed. Without this, the home-page country / region
+   * filter silently excludes pre-rollout rooms — even after the owner
+   * sets a country, their room stays in a `''` bucket that no chip
+   * matches. Fully idempotent: re-runs on every boot but only touches
+   * rooms whose `ownerCountry` is missing or empty.
+   *
+   * Cheap once steady-state — the index on `ownerCountry` makes the
+   * filter `{ownerCountry: ''}` a fast scan, and the per-room update
+   * goes through a bulkWrite. Future-proofed: if a brand-new install
+   * hits this, it does no work because all rooms already have a value.
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.backfillOwnerCountry();
+    } catch (err) {
+      this.logger.warn(
+        `Room ownerCountry backfill failed: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private async backfillOwnerCountry(): Promise<void> {
+    const stale = await this.roomModel
+      .find({
+        $or: [{ ownerCountry: { $exists: false } }, { ownerCountry: '' }],
+      })
+      .select('_id ownerId')
+      .lean()
+      .exec();
+    if (stale.length === 0) return;
+
+    const ownerIds = Array.from(
+      new Set(stale.map((r) => r.ownerId.toString())),
+    ).map((id) => new Types.ObjectId(id));
+    const owners = await this.userModel
+      .find({ _id: { $in: ownerIds } })
+      .select('_id country')
+      .lean()
+      .exec();
+    const countryByOwner = new Map(
+      owners.map((u) => [u._id.toString(), (u.country ?? '').toUpperCase()]),
+    );
+
+    const ops = stale
+      .map((r) => {
+        const country = countryByOwner.get(r.ownerId.toString()) ?? '';
+        if (!country) return null;
+        return {
+          updateOne: {
+            filter: { _id: r._id },
+            update: { $set: { ownerCountry: country } },
+          },
+        };
+      })
+      .filter((op) => op !== null) as Array<{
+      updateOne: {
+        filter: Record<string, unknown>;
+        update: Record<string, unknown>;
+      };
+    }>;
+    if (ops.length === 0) return;
+
+    await this.roomModel.bulkWrite(ops, { ordered: false });
+    this.logger.log(
+      `Backfilled ownerCountry on ${ops.length} room(s) (of ${stale.length} stale).`,
+    );
+  }
+
 
   /**
    * Fire-and-forget FCM push for room events that the target user must

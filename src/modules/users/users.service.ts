@@ -1,9 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 
 import { CounterScope } from '../common/schemas/counter.schema';
 import { NumericIdService } from '../common/numeric-id.service';
+import { Room, RoomDocument } from '../rooms/schemas/room.schema';
 import {
   AuthProvider,
   HostTier,
@@ -26,8 +32,11 @@ export interface ListUsersParams {
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
     private readonly numericIds: NumericIdService,
   ) {}
 
@@ -281,6 +290,7 @@ export class UsersService {
     if (update.displayName !== undefined) user.displayName = update.displayName;
     if (update.bio !== undefined) user.bio = update.bio;
     if (update.language !== undefined) user.language = update.language;
+    const previousCountry = user.country;
     if (update.country !== undefined) user.country = update.country.toUpperCase();
     if (update.gender !== undefined) user.gender = update.gender;
     if (update.dateOfBirth !== undefined) {
@@ -298,6 +308,32 @@ export class UsersService {
     }
 
     await user.save();
+
+    // Country change → sync the denormalized `Room.ownerCountry` on
+    // every room this user owns. Done via the Room model directly
+    // rather than via RoomsService to avoid a UsersModule→RoomsModule
+    // import cycle (UsersModule has no need to know about anything
+    // else from RoomsModule). Failure here doesn't roll back the user
+    // save — the room boot-time backfill catches stale rows on the
+    // next deploy, and the home filter just shows the room one click
+    // late until then. Logged so it's visible.
+    if (
+      update.country !== undefined &&
+      user.country !== previousCountry
+    ) {
+      try {
+        await this.roomModel
+          .updateMany(
+            { ownerId: user._id },
+            { $set: { ownerCountry: user.country } },
+          )
+          .exec();
+      } catch (err) {
+        this.logger.warn(
+          `Room.ownerCountry sync for ${user._id} failed: ${(err as Error).message}`,
+        );
+      }
+    }
     return user;
   }
 
