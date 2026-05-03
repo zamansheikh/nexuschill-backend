@@ -321,8 +321,8 @@ export class RocketService {
     // Live fuel-update broadcast — fires on EVERY successful gift so
     // the in-room gauge animates in real time. Uses the post-increment
     // values so the client doesn't have to reconcile against a stale
-    // snapshot. Skipped if the rocket is already done for the day.
-    if (fresh.status !== RocketStatus.COMPLETE) {
+    // snapshot.
+    {
       const currentLv = config.levels.find(
         (l) => l.level === fresh.currentLevel,
       );
@@ -341,19 +341,28 @@ export class RocketService {
       }
     }
 
-    if (fresh.status !== RocketStatus.IDLE) return; // countdown already running, or complete
+    // Skip the flip only if a launch is ALREADY mid-countdown — that's
+    // the only state we need to leave alone. IDLE is the normal path;
+    // COMPLETE is a legacy stuck state from before the wrap-around
+    // landed and we want the next gift to unstick it back into the
+    // cycle. With wrap-around, COMPLETE is no longer produced by
+    // launchOne, but old state docs in the DB still need an escape.
+    if (fresh.status === RocketStatus.COUNTDOWN) return;
 
     const lv = config.levels.find((l) => l.level === fresh.currentLevel);
-    if (!lv) return; // out of levels — done for the day
+    if (!lv) return; // out of levels — admin removed all levels
 
     if (fresh.currentEnergy < lv.energyRequired) return; // still filling
 
     // Atomic flip — ensures only one concurrent caller wins the launch.
+    // Accepts both IDLE and the legacy COMPLETE so stuck rows return
+    // to the cycle on the next gift instead of waiting for the day
+    // boundary.
     const flip = await this.stateModel
       .updateOne(
         {
           _id: fresh._id,
-          status: RocketStatus.IDLE,
+          status: { $in: [RocketStatus.IDLE, RocketStatus.COMPLETE] },
         },
         {
           $set: {
