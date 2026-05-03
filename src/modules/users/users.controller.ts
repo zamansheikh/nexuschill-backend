@@ -16,6 +16,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 
 import { AuthenticatedUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MediaService } from '../media/media.service';
+import { SocialService } from '../social/social.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UsersService } from './users.service';
 
@@ -28,6 +29,7 @@ export class UsersController {
   constructor(
     private readonly users: UsersService,
     private readonly media: MediaService,
+    private readonly social: SocialService,
   ) {}
 
   // ---------- Owner endpoints ----------
@@ -35,7 +37,14 @@ export class UsersController {
   @Get('me')
   async me(@CurrentUser() current: AuthenticatedUser) {
     const user = await this.users.getByIdOrThrow(current.userId);
-    return { user };
+    // Embed visitorsCount on the self response so the "Me" tab can
+    // render its three stat tiles in one request. followersCount /
+    // followingCount come for free — they're denormalized fields on
+    // the user doc.
+    const visitorsCount = await this.social.visitorsCount(current.userId);
+    const json = user.toJSON() as Record<string, any>;
+    json.visitorsCount = visitorsCount;
+    return { user: json };
   }
 
   @Patch('me')
@@ -120,9 +129,24 @@ export class UsersController {
   // ---------- Public endpoints ----------
 
   @Get(':id')
-  async publicProfile(@Param('id') id: string) {
+  async publicProfile(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
     const user = await this.users.getByIdOrThrow(id);
-    return { user: this.users.toPublic(user) };
+    const json = this.users.toPublic(user);
+    // `isFollowing` is the caller's perspective on this user — used
+    // by the mobile profile page + seat-actions sheet to render the
+    // Follow / Following toggle without a second round trip.
+    // Visitors count is included so the public profile renders the
+    // same three-tile stat strip the owner sees.
+    const [isFollowing, visitorsCount] = await Promise.all([
+      this.social.isFollowing(current.userId, id),
+      this.social.visitorsCount(id),
+    ]);
+    (json as Record<string, unknown>).isFollowing = isFollowing;
+    (json as Record<string, unknown>).visitorsCount = visitorsCount;
+    return { user: json };
   }
 
   // ---------- helpers ----------

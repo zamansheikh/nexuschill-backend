@@ -177,6 +177,18 @@ export class User {
   @Prop({ type: Boolean, default: false })
   phoneVerified!: boolean;
 
+  /** Denormalized social-graph counts. The follow / unfollow service
+   *  bumps these atomically with the corresponding Follow row insert /
+   *  delete so the public-profile endpoint can return them in O(1)
+   *  without a `countDocuments` per request. Visitor count lives on
+   *  the social side too (not denormalized — computed on the
+   *  visitors-list endpoint, which is rare). */
+  @Prop({ type: Number, default: 0 })
+  followersCount!: number;
+
+  @Prop({ type: Number, default: 0 })
+  followingCount!: number;
+
   @Prop({ type: Date })
   lastLoginAt?: Date;
 
