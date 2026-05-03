@@ -322,7 +322,9 @@ export class LuckyBagService {
    *  AND an effective expiry of `availableAt + claimWindowSeconds`, so
    *  old bags created with a long lifetime (24h before the timing
    *  config landed) drop out of the active list once their actual
-   *  claim window has passed. */
+   *  claim window has passed. Sender is populated so late joiners see
+   *  the actual avatar + name on the floating card / claim modal,
+   *  not a generic "Someone" fallback. */
   async listActiveInRoom(roomId: string) {
     if (!Types.ObjectId.isValid(roomId)) return [];
     const config = await this.getConfig();
@@ -340,6 +342,7 @@ export class LuckyBagService {
       })
       .sort({ createdAt: -1 })
       .limit(20)
+      .populate('senderId', 'username displayName avatarUrl numericId')
       .exec();
   }
 
