@@ -45,6 +45,9 @@ export class LuckyBagController {
       tiers: config.tiers,
       composerShowDistributionMode: config.composerShowDistributionMode,
       composerDefaultDistributionMode: config.composerDefaultDistributionMode,
+      openCountdownSeconds: config.openCountdownSeconds,
+      claimWindowSeconds: config.claimWindowSeconds,
+      maxConcurrentPerRoom: config.maxConcurrentPerRoom,
     };
   }
 

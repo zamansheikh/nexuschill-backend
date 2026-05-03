@@ -33,10 +33,10 @@ const MAX_TOTAL_COINS = 100_000_000;
 /** Slot count bounds — matches the in-app composer presets (10..100). */
 const MIN_SLOTS = 1;
 const MAX_SLOTS = 100;
-/** Seconds the recipients have to wait before claiming. */
-const COUNTDOWN_SECONDS = 12;
-/** Total bag lifetime — after this, unclaimed slots refund to sender. */
-const LIFETIME_HOURS = 24;
+/** Fallback when config doesn't exist yet — overridden per-create by
+ *  `config.openCountdownSeconds` and `config.claimWindowSeconds`. */
+const DEFAULT_OPEN_COUNTDOWN_SECONDS = 30;
+const DEFAULT_CLAIM_WINDOW_SECONDS = 30;
 
 const SINGLETON_KEY = 'singleton';
 
@@ -146,6 +146,9 @@ export class LuckyBagService {
     tiers?: LuckyBagTier[];
     composerShowDistributionMode?: boolean;
     composerDefaultDistributionMode?: LuckyBagDistributionMode;
+    openCountdownSeconds?: number;
+    claimWindowSeconds?: number;
+    maxConcurrentPerRoom?: number;
   }): Promise<LuckyBagConfigDocument> {
     if (update.commissionRate !== undefined) {
       if (update.commissionRate < 0 || update.commissionRate > 1) {
@@ -207,6 +210,15 @@ export class LuckyBagService {
     if (update.composerDefaultDistributionMode !== undefined) {
       set.composerDefaultDistributionMode =
         update.composerDefaultDistributionMode;
+    }
+    if (update.openCountdownSeconds !== undefined) {
+      set.openCountdownSeconds = update.openCountdownSeconds;
+    }
+    if (update.claimWindowSeconds !== undefined) {
+      set.claimWindowSeconds = update.claimWindowSeconds;
+    }
+    if (update.maxConcurrentPerRoom !== undefined) {
+      set.maxConcurrentPerRoom = update.maxConcurrentPerRoom;
     }
 
     return this.configModel
@@ -357,6 +369,28 @@ export class LuckyBagService {
         message: 'Lucky Bag is currently disabled.',
       });
     }
+    // Concurrent-bag cap. Default 1 — only one active bag per room at
+    // a time, mirrors the in-app expectation that you wait for the
+    // current bag to finish before dropping another. Admin can raise
+    // this in `/lucky-bag` config if multi-drop UX ever lands.
+    const maxConcurrent = config.maxConcurrentPerRoom ?? 1;
+    const activeCount = await this.bagModel
+      .countDocuments({
+        roomId: new Types.ObjectId(input.roomId),
+        status: LuckyBagStatus.PENDING,
+        expiresAt: { $gt: new Date() },
+      })
+      .exec();
+    if (activeCount >= maxConcurrent) {
+      throw new BadRequestException({
+        code: 'TOO_MANY_ACTIVE',
+        message:
+          maxConcurrent === 1
+            ? 'A Lucky Bag is already active in this room. Wait for it to finish before dropping another.'
+            : `At most ${maxConcurrent} Lucky Bags can be active in this room at once.`,
+      });
+    }
+
     // Distribution-mode policy. When the admin has hidden the picker,
     // the server forces `composerDefaultDistributionMode` regardless of
     // what the client sent — keeps mobile honest if it tries to override
@@ -408,8 +442,18 @@ export class LuckyBagService {
           )
         : this.distributeRandom(userPool, input.slotCount);
 
-    // 3. Persist the bag.
+    // 3. Persist the bag. The countdown + claim window come from the
+    //    admin config so operators can tune the in-app feel without a
+    //    redeploy.
+    const openCountdownSeconds =
+      config.openCountdownSeconds ?? DEFAULT_OPEN_COUNTDOWN_SECONDS;
+    const claimWindowSeconds =
+      config.claimWindowSeconds ?? DEFAULT_CLAIM_WINDOW_SECONDS;
     const now = new Date();
+    const availableAt = new Date(now.getTime() + openCountdownSeconds * 1000);
+    const expiresAt = new Date(
+      availableAt.getTime() + claimWindowSeconds * 1000,
+    );
     const bag = await this.bagModel.create({
       senderId: new Types.ObjectId(input.senderId),
       roomId: new Types.ObjectId(input.roomId),
@@ -418,8 +462,8 @@ export class LuckyBagService {
       slotAmounts,
       nextSlotIndex: 0,
       claims: [],
-      availableAt: new Date(now.getTime() + COUNTDOWN_SECONDS * 1000),
-      expiresAt: new Date(now.getTime() + LIFETIME_HOURS * 3600 * 1000),
+      availableAt,
+      expiresAt,
       status: LuckyBagStatus.PENDING,
       distributionMode: mode,
       applyCommission,

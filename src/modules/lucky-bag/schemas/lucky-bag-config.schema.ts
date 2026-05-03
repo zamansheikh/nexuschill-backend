@@ -90,6 +90,31 @@ export class LuckyBagConfig {
     default: LuckyBagDistributionMode.RANDOM,
   })
   composerDefaultDistributionMode!: LuckyBagDistributionMode;
+
+  /**
+   * Seconds between the bag drop and the open button becoming
+   * tappable. The floating card animates the countdown so users in
+   * the room build anticipation.
+   */
+  @Prop({ type: Number, default: 30, min: 1, max: 300 })
+  openCountdownSeconds!: number;
+
+  /**
+   * Seconds the bag stays claimable AFTER the open button appears.
+   * Once this elapses without a claim, the bag expires and the card
+   * vanishes from screen. Together with `openCountdownSeconds`, this
+   * defines the bag's full on-screen lifetime.
+   */
+  @Prop({ type: Number, default: 30, min: 5, max: 600 })
+  claimWindowSeconds!: number;
+
+  /**
+   * Hard cap on how many bags can be in flight in the same room at
+   * the same time. Default 1 — only one active bag per room. Increase
+   * if you want to allow multiple senders to drop bags concurrently.
+   */
+  @Prop({ type: Number, default: 1, min: 1, max: 10 })
+  maxConcurrentPerRoom!: number;
 }
 
 export const LuckyBagConfigSchema = SchemaFactory.createForClass(LuckyBagConfig);

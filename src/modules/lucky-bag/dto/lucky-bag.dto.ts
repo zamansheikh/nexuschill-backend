@@ -84,4 +84,22 @@ export class UpdateLuckyBagConfigDto {
   @IsOptional()
   @IsEnum(LuckyBagDistributionMode)
   composerDefaultDistributionMode?: LuckyBagDistributionMode;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(300)
+  openCountdownSeconds?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(5)
+  @Max(600)
+  claimWindowSeconds?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  maxConcurrentPerRoom?: number;
 }
