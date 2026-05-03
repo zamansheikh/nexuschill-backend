@@ -58,6 +58,10 @@ export const LuckyBagClaimSchema = SchemaFactory.createForClass(LuckyBagClaim);
       ret.id = ret._id?.toString();
       delete ret._id;
       delete ret.__v;
+      // Stamp the server's clock at serialization time so the mobile
+      // can anchor its countdown to server-relative time (avoids
+      // clock-drift mismatch between two devices viewing the same bag).
+      ret._serverNow = new Date().toISOString();
       return ret;
     },
   },

@@ -748,10 +748,17 @@ export class LuckyBagService {
         message: 'Only the sender can cancel this Lucky Bag.',
       });
     }
-    if (bag.status !== LuckyBagStatus.PENDING) {
+    // Already-EXPIRED bags can't be cancelled twice. PENDING bags are
+    // the normal cancel path; DEPLOYED bags (all slots already claimed)
+    // are also accepted so the sender can clear a stuck floating card —
+    // refund will just be 0 since there's nothing left.
+    if (
+      bag.status !== LuckyBagStatus.PENDING &&
+      bag.status !== LuckyBagStatus.DEPLOYED
+    ) {
       throw new ConflictException({
-        code: 'BAG_NOT_PENDING',
-        message: 'This Lucky Bag is no longer cancellable.',
+        code: 'BAG_ALREADY_EXPIRED',
+        message: 'This Lucky Bag has already been cancelled.',
       });
     }
 
@@ -760,19 +767,24 @@ export class LuckyBagService {
     const claimedAmount = bag.claims.reduce((s, c) => s + c.amount, 0);
     const refundAmount = Math.max(0, bag.totalCoins - claimedAmount);
 
-    // Atomic flip: only succeed if still PENDING. Avoids races with
-    // last-claim-arrives-during-cancel.
+    // Atomic flip from either PENDING or DEPLOYED → EXPIRED. The $in
+    // filter avoids races with last-claim-arrives-during-cancel: if the
+    // bag has already been moved to EXPIRED by a parallel cancel, the
+    // query won't match and we throw below.
     const updated = await this.bagModel
       .findOneAndUpdate(
-        { _id: bag._id, status: LuckyBagStatus.PENDING },
+        {
+          _id: bag._id,
+          status: { $in: [LuckyBagStatus.PENDING, LuckyBagStatus.DEPLOYED] },
+        },
         { $set: { status: LuckyBagStatus.EXPIRED, expiresAt: new Date() } },
         { new: true },
       )
       .exec();
     if (!updated) {
       throw new ConflictException({
-        code: 'BAG_NOT_PENDING',
-        message: 'Bag was claimed or expired before cancellation took effect.',
+        code: 'BAG_ALREADY_EXPIRED',
+        message: 'Bag was already cancelled or expired.',
       });
     }
 
