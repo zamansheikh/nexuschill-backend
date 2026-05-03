@@ -278,26 +278,35 @@ export class RocketService {
     if (inc.modifiedCount === 0) {
       // Either the doc doesn't exist yet, or the user has no
       // contribution row yet. Use upsert + $push.
-      await this.stateModel
-        .updateOne(
-          { roomId: roomOid, dayKey },
-          {
-            $setOnInsert: {
-              roomId: roomOid,
-              dayKey,
-              currentLevel: 1,
-              currentEnergy: 0,
-              status: RocketStatus.IDLE,
-              launches: [],
+      // IMPORTANT: do NOT initialize `currentEnergy` in $setOnInsert —
+      // it conflicts with the $inc on the same path and Mongo rejects
+      // the whole op. $inc on a missing field starts from 0 anyway.
+      try {
+        await this.stateModel
+          .updateOne(
+            { roomId: roomOid, dayKey },
+            {
+              $setOnInsert: {
+                roomId: roomOid,
+                dayKey,
+                currentLevel: 1,
+                status: RocketStatus.IDLE,
+                launches: [],
+              },
+              $inc: { currentEnergy: energyDelta },
+              $push: {
+                contributions: { userId: senderOid, energy: energyDelta },
+              },
             },
-            $inc: { currentEnergy: energyDelta },
-            $push: {
-              contributions: { userId: senderOid, energy: energyDelta },
-            },
-          },
-          { upsert: true },
-        )
-        .exec();
+            { upsert: true },
+          )
+          .exec();
+      } catch (err: any) {
+        this.log.error(
+          `addEnergy upsert failed (room=${roomId}, sender=${senderId}): ${err?.message ?? err}`,
+        );
+        return;
+      }
     }
 
     // Step 2: re-fetch to check threshold + flip to COUNTDOWN. We do
