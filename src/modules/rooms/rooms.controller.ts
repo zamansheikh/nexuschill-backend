@@ -84,8 +84,9 @@ export class RoomsController {
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('sort') sort?: 'popular' | 'recent',
+    @Query('country') country?: string,
   ) {
-    return this.rooms.listLive({ page, limit, sort });
+    return this.rooms.listLive({ page, limit, sort, country });
   }
 
   /** Public snapshot — used to render the room intro card from a deeplink. */

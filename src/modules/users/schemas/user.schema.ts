@@ -10,6 +10,12 @@ export enum UserStatus {
   DELETED = 'deleted',
 }
 
+export enum UserGender {
+  MALE = 'male',
+  FEMALE = 'female',
+  OTHER = 'other',
+}
+
 export enum AuthProvider {
   EMAIL = 'email',
   PHONE = 'phone',
@@ -57,6 +63,17 @@ export const HostProfileSchema = SchemaFactory.createForClass(HostProfile);
     virtuals: true,
     transform: (_doc, ret: Record<string, any>) => {
       ret.id = ret._id?.toString();
+      // Server-computed signal the mobile app uses to gate the
+      // home screen behind the post-signup profile-completion form.
+      // True only when the three required onboarding fields are set.
+      // Country has a legacy default ('BD') so we treat any non-empty
+      // string as filled; gender + dateOfBirth must be explicit.
+      ret.profileComplete = Boolean(
+        ret.gender &&
+          ret.dateOfBirth &&
+          typeof ret.country === 'string' &&
+          ret.country.length > 0,
+      );
       delete ret._id;
       delete ret.__v;
       delete ret.passwordHash;
@@ -125,6 +142,22 @@ export class User {
 
   @Prop({ type: String, default: 'BD' })
   country!: string;
+
+  /** Self-declared at the post-signup profile-completion step. Optional
+   *  in the schema so legacy users (created before this field existed)
+   *  don't break, but required by the profile-complete gate before the
+   *  user reaches the home screen. ISO-style enum keeps the value space
+   *  bounded; richer identities can be expressed via display name. */
+  @Prop({ type: String, enum: UserGender, default: null })
+  gender?: UserGender | null;
+
+  /** Self-declared birth date. Stored as a Date so age can be derived
+   *  consistently regardless of when the value is read. The mobile
+   *  picker enforces a 13+ minimum at submit; schema-level validation
+   *  is intentionally absent so we can lower/raise the cutoff later
+   *  without a migration. Treated as filled if non-null. */
+  @Prop({ type: Date, default: null })
+  dateOfBirth?: Date | null;
 
   @Prop({ type: String, enum: UserStatus, default: UserStatus.ACTIVE })
   status!: UserStatus;

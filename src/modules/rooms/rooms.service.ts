@@ -156,7 +156,7 @@ export class RoomsService {
 
     const owner = await this.userModel
       .findById(ownerOid)
-      .select('displayName username avatarUrl')
+      .select('displayName username avatarUrl country')
       .exec();
     if (!owner) throw new NotFoundException('Owner not found');
     const name =
@@ -169,10 +169,15 @@ export class RoomsService {
     // rooms have a sensible identity image immediately. Owner can
     // override later via the settings sheet's "Change Picture" row.
     const coverUrl = owner.avatarUrl?.trim() ?? '';
+    // Denormalize the owner's country onto the room so the home-page
+    // country / region filter can index-match without a $lookup. See
+    // Room.ownerCountry doc comment for the consistency tradeoff.
+    const ownerCountry = (owner.country ?? '').toUpperCase();
 
     const room = await this.numericIds.createWithId(CounterScope.ROOM, (numericId) =>
       this.roomModel.create({
         ownerId: ownerOid,
+        ownerCountry,
         kind,
         numericId,
         name,
@@ -280,6 +285,12 @@ export class RoomsService {
     page?: number;
     limit?: number;
     sort?: 'popular' | 'recent';
+    /** Comma-separated ISO-3166 codes (e.g. "BD" or "BD,IN,NP,PK"). The
+     *  mobile home page sends a single code for a country pill and the
+     *  expanded list for a region pill (South Asia → BD,IN,NP,PK,LK).
+     *  Empty / undefined means "no country filter". Codes are uppercased
+     *  to match the indexed `ownerCountry` field. */
+    country?: string;
   }) {
     const page = Math.max(1, params.page ?? 1);
     const limit = Math.min(50, Math.max(1, params.limit ?? 20));
@@ -289,10 +300,20 @@ export class RoomsService {
       ? { liveAt: -1 }
       : { viewerCount: -1, liveAt: -1 };
 
-    const filter = {
+    const filter: Record<string, unknown> = {
       status: RoomStatus.ACTIVE,
       viewerCount: { $gt: 0 },
     };
+
+    const countries = (params.country ?? '')
+      .split(',')
+      .map((c) => c.trim().toUpperCase())
+      .filter((c) => c.length === 2);
+    if (countries.length === 1) {
+      filter.ownerCountry = countries[0];
+    } else if (countries.length > 1) {
+      filter.ownerCountry = { $in: countries };
+    }
 
     const [items, total] = await Promise.all([
       this.roomModel

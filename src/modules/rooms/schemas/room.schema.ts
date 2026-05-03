@@ -100,6 +100,23 @@ export class Room {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
   ownerId!: Types.ObjectId;
 
+  /**
+   * ISO-3166 country code denormalized from the owner at room-create
+   * time. Powers the home-page country / region filter on the live
+   * rooms list — filtering through a `$lookup` against User on every
+   * query was the natural alternative but the rooms list is the
+   * hottest path in the app and an indexed scalar field on Room is
+   * dramatically cheaper.
+   *
+   * On owner country change the value goes stale; intentionally not
+   * propagated automatically since users rarely change country and
+   * the home-page filter tolerates a small lag. If we ever need
+   * strict consistency, propagate via a single `updateMany` from
+   * `users.updateProfile` keyed on `ownerId`.
+   */
+  @Prop({ type: String, default: '', index: true })
+  ownerCountry!: string;
+
   @Prop({ type: String, enum: RoomKind, default: RoomKind.AUDIO, index: true })
   kind!: RoomKind;
 

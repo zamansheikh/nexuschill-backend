@@ -4,7 +4,14 @@ import { FilterQuery, Model, Types } from 'mongoose';
 
 import { CounterScope } from '../common/schemas/counter.schema';
 import { NumericIdService } from '../common/numeric-id.service';
-import { AuthProvider, HostTier, User, UserDocument, UserStatus } from './schemas/user.schema';
+import {
+  AuthProvider,
+  HostTier,
+  User,
+  UserDocument,
+  UserGender,
+  UserStatus,
+} from './schemas/user.schema';
 
 export interface ListUsersParams {
   page?: number;
@@ -255,6 +262,8 @@ export class UsersService {
       language: string;
       country: string;
       username: string;
+      gender: UserGender;
+      dateOfBirth: string;
     }>,
   ): Promise<UserDocument> {
     const user = await this.getByIdOrThrow(id);
@@ -273,6 +282,20 @@ export class UsersService {
     if (update.bio !== undefined) user.bio = update.bio;
     if (update.language !== undefined) user.language = update.language;
     if (update.country !== undefined) user.country = update.country.toUpperCase();
+    if (update.gender !== undefined) user.gender = update.gender;
+    if (update.dateOfBirth !== undefined) {
+      // DTO already validated as ISO date string. Reject obviously
+      // bogus values up here so a malformed string can't slip past
+      // and become a NaN-Date in storage.
+      const parsed = new Date(update.dateOfBirth);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException({
+          code: 'INVALID_DOB',
+          message: 'Invalid date of birth',
+        });
+      }
+      user.dateOfBirth = parsed;
+    }
 
     await user.save();
     return user;
