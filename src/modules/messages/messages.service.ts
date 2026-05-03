@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -16,6 +17,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { RealtimeEventType } from '../realtime/realtime.types';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
+  buildPairKey,
   Conversation,
   ConversationDocument,
 } from './schemas/conversation.schema';
@@ -70,7 +72,7 @@ export interface PublicUserView {
  * (in the conversation's `unread` map) keeps the write path O(1).
  */
 @Injectable()
-export class MessagesService {
+export class MessagesService implements OnModuleInit {
   private readonly logger = new Logger(MessagesService.name);
 
   constructor(
@@ -83,6 +85,60 @@ export class MessagesService {
     private readonly realtime: RealtimeService,
     private readonly notifications: NotificationsService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    // Earlier versions of this collection had a unique index directly on
+    // the `participants` array, which Mongo enforces per-element — that
+    // capped each user at exactly one conversation forever (E11000 on
+    // every subsequent chat). Migrate any deployment forward:
+    //   1. Backfill `pairKey` on existing rows so the new unique index
+    //      can be built without colliding nulls.
+    //   2. Drop the legacy `participants_1` index if it's still around.
+    //   3. Sync indexes so the new `pairKey` unique index is created.
+    try {
+      await this.backfillPairKeys();
+      await this.dropLegacyParticipantsIndex();
+      await this.conversationModel.syncIndexes();
+    } catch (err) {
+      this.logger.warn(
+        `Conversation index migration failed: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private async backfillPairKeys(): Promise<void> {
+    const cursor = this.conversationModel
+      .find({ pairKey: { $in: [null, ''] } })
+      .cursor();
+    let updated = 0;
+    for await (const doc of cursor) {
+      const [a, b] = doc.participants ?? [];
+      if (!a || !b) continue;
+      doc.pairKey = buildPairKey(a, b);
+      await doc.save();
+      updated += 1;
+    }
+    if (updated > 0) {
+      this.logger.log(`Backfilled pairKey on ${updated} conversation(s)`);
+    }
+  }
+
+  private async dropLegacyParticipantsIndex(): Promise<void> {
+    const collection = this.conversationModel.collection;
+    const indexes = await collection.indexes();
+    const legacy = indexes.find(
+      (idx) =>
+        idx.name === 'participants_1' ||
+        (idx.unique === true &&
+          idx.key &&
+          Object.keys(idx.key).length === 1 &&
+          idx.key.participants === 1),
+    );
+    if (legacy?.name) {
+      await collection.dropIndex(legacy.name);
+      this.logger.log(`Dropped legacy unique index ${legacy.name}`);
+    }
+  }
 
   // ============== Read paths ==============
 
@@ -285,16 +341,18 @@ export class MessagesService {
     a: Types.ObjectId,
     b: Types.ObjectId,
   ): Promise<ConversationDocument> {
-    // Sort participants ascending so both directions (A→B, B→A) resolve
-    // to the same indexed key.
-    const sorted = [a, b].sort((x, y) => x.toString().localeCompare(y.toString()));
+    const pairKey = buildPairKey(a, b);
+    const sorted = [a, b].sort((x, y) =>
+      x.toString().localeCompare(y.toString()),
+    );
     const existing = await this.conversationModel
-      .findOne({ participants: sorted })
+      .findOne({ pairKey })
       .exec();
     if (existing) return existing;
     try {
       return await this.conversationModel.create({
         participants: sorted,
+        pairKey,
         unread: new Map<string, number>([
           [sorted[0].toString(), 0],
           [sorted[1].toString(), 0],
@@ -304,7 +362,7 @@ export class MessagesService {
       // Race on the unique index — re-fetch and use the winning row.
       if (err?.code === 11000) {
         const winner = await this.conversationModel
-          .findOne({ participants: sorted })
+          .findOne({ pairKey })
           .exec();
         if (winner) return winner;
       }

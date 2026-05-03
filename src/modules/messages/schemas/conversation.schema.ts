@@ -14,10 +14,11 @@ function refToId(v: unknown): unknown {
  * same conversation document; their unread counts are tracked in the
  * `unread` map keyed by userId.
  *
- * The `participants` array is always sorted ascending so we can build a
- * unique index that guarantees idempotent get-or-create. Pre-sorting also
- * makes the index usable from either direction (A→B and B→A find the
- * same row).
+ * Idempotent get-or-create is enforced by a derived `pairKey`
+ * (`<smallerId>_<largerId>`) with a unique index. A unique index directly
+ * on the `participants` array won't work — Mongo treats each array
+ * element as a separate index entry, so a unique index there would
+ * forbid a user from ever having more than one conversation.
  */
 @Schema({
   timestamps: true,
@@ -48,6 +49,12 @@ export class Conversation {
   })
   participants!: Types.ObjectId[];
 
+  /** Deterministic key for the participant pair: `<smallerObjectId>_<largerObjectId>`.
+   *  Carries the unique constraint so both A→B and B→A resolve to the
+   *  same row. */
+  @Prop({ type: String, required: true, unique: true, index: true })
+  pairKey!: string;
+
   /** Pointer to the most recent message — used to render the inbox preview
    *  without an extra query per row. */
   @Prop({ type: Types.ObjectId, ref: 'Message', default: null })
@@ -70,7 +77,19 @@ export class Conversation {
 }
 
 export const ConversationSchema = SchemaFactory.createForClass(Conversation);
-// Idempotent get-or-create — sorting participants on insert lets this
-// catch both directions (A,B and B,A pre-sort to the same key).
-ConversationSchema.index({ participants: 1 }, { unique: true });
+// Inbox lookup: list every conversation a user participates in, newest first.
 ConversationSchema.index({ participants: 1, lastMessageAt: -1 });
+
+/**
+ * Build the deterministic pair key for two participant ids. The smaller
+ * id (lexicographic) goes first so both A→B and B→A produce the same
+ * value, which the unique index on `pairKey` then enforces.
+ */
+export function buildPairKey(
+  a: Types.ObjectId | string,
+  b: Types.ObjectId | string,
+): string {
+  const aStr = a.toString();
+  const bStr = b.toString();
+  return aStr < bStr ? `${aStr}_${bStr}` : `${bStr}_${aStr}`;
+}
