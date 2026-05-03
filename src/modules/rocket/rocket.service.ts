@@ -189,6 +189,10 @@ export class RocketService {
   async getState(roomId: string): Promise<RocketRoomStateDocument | null> {
     if (!Types.ObjectId.isValid(roomId)) return null;
     const dayKey = this.getDayKey(new Date());
+    // Populate the User refs on every userId in the contribution +
+    // launch records so the mobile page can render real names + avatars
+    // without falling back to "User <last-4-of-id>". Lean populate
+    // keeps this cheap — typically a few dozen user docs per state row.
     return this.stateModel
       .findOneAndUpdate(
         { roomId: new Types.ObjectId(roomId), dayKey },
@@ -204,6 +208,15 @@ export class RocketService {
           },
         },
         { upsert: true, new: true, setDefaultsOnInsert: true },
+      )
+      .populate('contributions.userId', 'username displayName avatarUrl numericId')
+      .populate(
+        'launches.topContributors.userId',
+        'username displayName avatarUrl numericId',
+      )
+      .populate(
+        'launches.randomBeneficiaries.userId',
+        'username displayName avatarUrl numericId',
       )
       .exec();
   }
@@ -638,7 +651,35 @@ export class RocketService {
     const roomIdStr = state.roomId.toString();
 
     // 5. Broadcast — room renders the explosion + reward roster, global
-    //    banner shows winners.
+    //    banner shows winners. Hydrate the winners' user docs so the
+    //    mobile launch overlay can render names + avatars without
+    //    falling back to "User <last-4-of-id>".
+    const winnerIds = [
+      ...top.map((t) => t.userId),
+      ...randomBeneficiaries.map((r) => r.userId),
+    ];
+    const winnerUsers = winnerIds.length
+      ? await this.userModel
+          .find({ _id: { $in: winnerIds } })
+          .select({ username: 1, displayName: 1, avatarUrl: 1, numericId: 1 })
+          .lean()
+          .exec()
+      : [];
+    const userMap = new Map<string, (typeof winnerUsers)[number]>();
+    for (const u of winnerUsers) {
+      userMap.set(u._id.toString(), u);
+    }
+    const hydrate = (userId: Types.ObjectId) => {
+      const u = userMap.get(userId.toString());
+      if (!u) return null;
+      return {
+        id: u._id.toString(),
+        username: u.username ?? '',
+        displayName: u.displayName ?? '',
+        avatarUrl: u.avatarUrl ?? '',
+        numericId: u.numericId ?? null,
+      };
+    };
     void this.realtime.emitToRoom(
       roomIdStr,
       RealtimeEventType.ROOM_ROCKET_LAUNCH,
@@ -648,12 +689,14 @@ export class RocketService {
         stage: 'launched',
         topContributors: top.map((t) => ({
           userId: t.userId.toString(),
+          user: hydrate(t.userId),
           rank: t.rank,
           energy: t.energy,
           coinsAwarded: t.coinsAwarded,
         })),
         randomBeneficiaries: randomBeneficiaries.map((r) => ({
           userId: r.userId.toString(),
+          user: hydrate(r.userId),
           coinsAwarded: r.coinsAwarded,
         })),
         nextLevel: nextLv.level,
