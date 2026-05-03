@@ -323,4 +323,21 @@ export class RoomsController {
   ) {
     return this.gifts.listForRoom(id, { page, limit });
   }
+
+  /// Per-period gift contribution leaderboard for a room. Drives the
+  /// trophy widget (daily total) + the Contribution page's three tabs
+  /// (Daily / Weekly / Monthly).
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/contributions')
+  async listContributions(
+    @Param('id') id: string,
+    @Query('period') period?: string,
+    @Query('limit') limit?: number,
+  ) {
+    const valid = ['daily', 'weekly', 'monthly'] as const;
+    const p = (valid as ReadonlyArray<string>).includes(period ?? '')
+      ? (period as 'daily' | 'weekly' | 'monthly')
+      : 'daily';
+    return this.gifts.getRoomContributions(id, p, limit ?? 50);
+  }
 }

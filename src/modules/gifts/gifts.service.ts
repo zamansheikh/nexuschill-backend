@@ -495,6 +495,175 @@ export class GiftsService {
     return rows[0]?.total ?? 0;
   }
 
+  // ============== Room contribution leaderboard ==============
+
+  /**
+   * Per-period gift contribution leaderboard for a room. Aggregates
+   * all `GiftEvent` rows where `contextType=room` + `contextId=roomId`
+   * within the period window, groups by sender, sums coin amounts,
+   * sorts descending, and hydrates user info for the top N.
+   *
+   * Period windows are computed in Asia/Dhaka so they line up with the
+   * other daily features (rocket, daily reward) — fixed +05:30 offset,
+   * no DST since Bangladesh doesn't observe it.
+   */
+  async getRoomContributions(
+    roomId: string,
+    period: 'daily' | 'weekly' | 'monthly',
+    limit = 50,
+  ): Promise<{
+    period: 'daily' | 'weekly' | 'monthly';
+    periodStart: Date;
+    periodEnd: Date;
+    periodTotal: number;
+    items: Array<{
+      rank: number;
+      userId: string;
+      user: {
+        id: string;
+        displayName: string;
+        username: string;
+        avatarUrl: string;
+        numericId: number | null;
+      } | null;
+      coins: number;
+      gifts: number;
+    }>;
+  }> {
+    if (!Types.ObjectId.isValid(roomId)) {
+      throw new BadRequestException({
+        code: 'INVALID_ROOM_ID',
+        message: 'Invalid room id',
+      });
+    }
+    const { start, end } = this._periodWindow(period);
+    const match = {
+      contextType: GiftContext.ROOM,
+      contextId: new Types.ObjectId(roomId),
+      status: 'completed',
+      createdAt: { $gte: start, $lt: end },
+    };
+
+    // Aggregation pipeline: group by sender, sum coins + count gifts,
+    // sort desc by coins, limit, then $lookup the user docs for the
+    // top N. Doing the user lookup AFTER limiting is much cheaper
+    // than populating every event in the period.
+    const ranked = await this.eventModel.aggregate<{
+      _id: Types.ObjectId;
+      coins: number;
+      gifts: number;
+      user: Array<{
+        _id: Types.ObjectId;
+        username?: string;
+        displayName?: string;
+        avatarUrl?: string;
+        numericId?: number | null;
+      }>;
+    }>([
+      { $match: match },
+      {
+        $group: {
+          _id: '$senderId',
+          coins: { $sum: '$totalCoinAmount' },
+          gifts: { $sum: '$count' },
+        },
+      },
+      { $sort: { coins: -1 } },
+      { $limit: Math.min(200, Math.max(1, limit)) },
+      {
+        $lookup: {
+          from: 'users',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'user',
+          pipeline: [
+            {
+              $project: {
+                _id: 1,
+                username: 1,
+                displayName: 1,
+                avatarUrl: 1,
+                numericId: 1,
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    // Total for the period — separate query so it includes contributors
+    // beyond the top-N cutoff.
+    const totalAgg = await this.eventModel.aggregate<{ total: number }>([
+      { $match: match },
+      { $group: { _id: null, total: { $sum: '$totalCoinAmount' } } },
+    ]);
+    const periodTotal = totalAgg.length > 0 ? totalAgg[0].total : 0;
+
+    const items = ranked.map((r, i) => {
+      const u = r.user.length > 0 ? r.user[0] : null;
+      return {
+        rank: i + 1,
+        userId: r._id.toString(),
+        user: u
+          ? {
+              id: u._id.toString(),
+              displayName: u.displayName ?? '',
+              username: u.username ?? '',
+              avatarUrl: u.avatarUrl ?? '',
+              numericId: u.numericId ?? null,
+            }
+          : null,
+        coins: r.coins,
+        gifts: r.gifts,
+      };
+    });
+
+    return {
+      period,
+      periodStart: start,
+      periodEnd: end,
+      periodTotal,
+      items,
+    };
+  }
+
+  /** Compute [start, end) for a period in Asia/Dhaka (UTC+05:30). */
+  private _periodWindow(period: 'daily' | 'weekly' | 'monthly'): {
+    start: Date;
+    end: Date;
+  } {
+    const tzOffsetMs = (5 * 60 + 30) * 60 * 1000;
+    const nowLocal = new Date(Date.now() + tzOffsetMs);
+    let startLocal: Date;
+    let endLocal: Date;
+    if (period === 'daily') {
+      startLocal = new Date(nowLocal);
+      startLocal.setUTCHours(0, 0, 0, 0);
+      endLocal = new Date(startLocal);
+      endLocal.setUTCDate(startLocal.getUTCDate() + 1);
+    } else if (period === 'weekly') {
+      // Week starts Monday — same convention as Room Support.
+      startLocal = new Date(nowLocal);
+      startLocal.setUTCHours(0, 0, 0, 0);
+      const dow = startLocal.getUTCDay(); // 0=Sun..6=Sat
+      const daysSinceMonday = (dow + 6) % 7;
+      startLocal.setUTCDate(startLocal.getUTCDate() - daysSinceMonday);
+      endLocal = new Date(startLocal);
+      endLocal.setUTCDate(startLocal.getUTCDate() + 7);
+    } else {
+      startLocal = new Date(
+        Date.UTC(nowLocal.getUTCFullYear(), nowLocal.getUTCMonth(), 1),
+      );
+      endLocal = new Date(
+        Date.UTC(nowLocal.getUTCFullYear(), nowLocal.getUTCMonth() + 1, 1),
+      );
+    }
+    return {
+      start: new Date(startLocal.getTime() - tzOffsetMs),
+      end: new Date(endLocal.getTime() - tzOffsetMs),
+    };
+  }
+
   // ============== Room transaction history ==============
 
   /// All gifts sent in a room — drives the in-room transaction-history
