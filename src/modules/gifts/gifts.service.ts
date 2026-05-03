@@ -505,16 +505,19 @@ export class GiftsService {
    *
    * Period windows are computed in Asia/Dhaka so they line up with the
    * other daily features (rocket, daily reward) — fixed +05:30 offset,
-   * no DST since Bangladesh doesn't observe it.
+   * no DST since Bangladesh doesn't observe it. The `alltime` period
+   * skips the time filter entirely so the trophy chip can show the
+   * room's lifetime total (matching the lifetime scope of the host's
+   * diamond badge).
    */
   async getRoomContributions(
     roomId: string,
-    period: 'daily' | 'weekly' | 'monthly',
+    period: 'daily' | 'weekly' | 'monthly' | 'alltime',
     limit = 50,
   ): Promise<{
-    period: 'daily' | 'weekly' | 'monthly';
-    periodStart: Date;
-    periodEnd: Date;
+    period: 'daily' | 'weekly' | 'monthly' | 'alltime';
+    periodStart: Date | null;
+    periodEnd: Date | null;
     periodTotal: number;
     items: Array<{
       rank: number;
@@ -536,13 +539,16 @@ export class GiftsService {
         message: 'Invalid room id',
       });
     }
-    const { start, end } = this._periodWindow(period);
-    const match = {
+    const window =
+      period === 'alltime' ? null : this._periodWindow(period);
+    const match: Record<string, unknown> = {
       contextType: GiftContext.ROOM,
       contextId: new Types.ObjectId(roomId),
       status: 'completed',
-      createdAt: { $gte: start, $lt: end },
     };
+    if (window) {
+      match.createdAt = { $gte: window.start, $lt: window.end };
+    }
 
     // Aggregation pipeline: group by sender, sum coins + count gifts,
     // sort desc by coins, limit, then $lookup the user docs for the
@@ -620,8 +626,8 @@ export class GiftsService {
 
     return {
       period,
-      periodStart: start,
-      periodEnd: end,
+      periodStart: window?.start ?? null,
+      periodEnd: window?.end ?? null,
       periodTotal,
       items,
     };

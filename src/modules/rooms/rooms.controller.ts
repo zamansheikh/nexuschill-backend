@@ -334,9 +334,9 @@ export class RoomsController {
     @Query('period') period?: string,
     @Query('limit') limit?: number,
   ) {
-    const valid = ['daily', 'weekly', 'monthly'] as const;
+    const valid = ['daily', 'weekly', 'monthly', 'alltime'] as const;
     const p = (valid as ReadonlyArray<string>).includes(period ?? '')
-      ? (period as 'daily' | 'weekly' | 'monthly')
+      ? (period as 'daily' | 'weekly' | 'monthly' | 'alltime')
       : 'daily';
     return this.gifts.getRoomContributions(id, p, limit ?? 50);
   }
