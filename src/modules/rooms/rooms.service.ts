@@ -447,6 +447,29 @@ export class RoomsService {
 
     const role = this.roleFor(room, userOid);
 
+    // Single-active-room invariant. Before joining this room, evict
+    // any RoomMember rows the caller still has in OTHER rooms — e.g.
+    // they tapped a global banner from room X into room Y, or signed
+    // in on a second device while still in a room on the first.
+    // Each auto-leave emits ROOM_MEMBER_LEFT to the prior room (so
+    // its members see the user disappear) and frees any seats they
+    // held there. Errors are swallowed per-room so a single broken
+    // prior membership can't block the new entry.
+    const priorMemberships = await this.memberModel
+      .find({ userId: userOid, roomId: { $ne: room._id } })
+      .select({ roomId: 1 })
+      .lean()
+      .exec();
+    for (const prior of priorMemberships) {
+      try {
+        await this.leave(prior.roomId.toString(), userId);
+      } catch (err: any) {
+        this.logger.warn(
+          `Auto-leave of prior room ${prior.roomId} failed for user ${userId}: ${err?.message ?? err}`,
+        );
+      }
+    }
+
     // Upsert presence; only bump viewerCount on a true insert.
     const existing = await this.memberModel
       .findOne({ roomId: room._id, userId: userOid })
