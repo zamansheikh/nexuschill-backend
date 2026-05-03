@@ -16,6 +16,7 @@ import { RtcRoleDto } from '../agora/dto/agora.dto';
 import { NumericIdService } from '../common/numeric-id.service';
 import { CounterScope } from '../common/schemas/counter.schema';
 import { CosmeticsService } from '../cosmetics/cosmetics.service';
+import { FcmService } from '../fcm/fcm.service';
 import { GiftsService } from '../gifts/gifts.service';
 import { MagicBallService } from '../magic-ball/magic-ball.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -74,7 +75,30 @@ export class RoomsService {
     private readonly gifts: GiftsService,
     private readonly cosmetics: CosmeticsService,
     private readonly magicBall: MagicBallService,
+    private readonly fcm: FcmService,
   ) {}
+
+  /**
+   * Fire-and-forget FCM push for room events that the target user must
+   * be able to act on even when their socket is dead (screen-off,
+   * backgrounded, killed). Failures are logged, never rethrown — FCM is
+   * a best-effort fallback to the realtime channel, not a primary path.
+   * See docs/backend/08-background-and-push.md §3.2.
+   */
+  private pushToUser(
+    userId: string,
+    title: string,
+    body: string,
+    data: Record<string, string>,
+  ): void {
+    void this.fcm
+      .sendToUser(userId, { title, body, data })
+      .catch((e) =>
+        this.logger.warn(
+          `Room FCM fan-out failed for ${userId}: ${(e as Error).message}`,
+        ),
+      );
+  }
 
   /**
    * Fire-and-forget: credit the user's Magic Ball `mic_minutes` counter
@@ -939,6 +963,23 @@ export class RoomsService {
       RealtimeEventType.SEAT_UPDATED,
       { seat: seat.toJSON() },
     );
+    // Tell the kicked user out-of-band — if their socket is dead the
+    // realtime event never reaches them, but the next time they look at
+    // the app the FCM tray entry tells them why their mic went silent.
+    // Tap routes back to the room (they're not blocked, just off the mic).
+    if (before?.userId) {
+      this.pushToUser(
+        before.userId.toString(),
+        'You were removed from a seat',
+        'A host moved you off the mic.',
+        {
+          kind: 'room.seat.kicked',
+          linkKind: 'room',
+          linkValue: room._id.toString(),
+          seatIndex: String(seatIndex),
+        },
+      );
+    }
     return { seat: seat.toJSON() };
   }
 
@@ -1032,6 +1073,27 @@ export class RoomsService {
         seatIndex,
         inviter: inviter?.toJSON() ?? null,
         target: target?.toJSON() ?? null,
+      },
+    );
+
+    // Mirror the invite over FCM. The realtime event already broadcasts
+    // to the whole room scope and the client filters by targetUserId;
+    // here we push *only* to the target so a backgrounded invitee still
+    // sees the prompt instead of missing the seat slot.
+    const inviterLabel =
+      (inviter as unknown as { displayName?: string; username?: string } | null)
+        ?.displayName ||
+      (inviter as unknown as { username?: string } | null)?.username ||
+      'A host';
+    this.pushToUser(
+      targetUserId,
+      `${inviterLabel} invited you to a seat`,
+      'Tap to take the mic.',
+      {
+        kind: 'room.seat.invited',
+        linkKind: 'room',
+        linkValue: room._id.toString(),
+        seatIndex: String(seatIndex),
       },
     );
 
@@ -1158,6 +1220,22 @@ export class RoomsService {
         );
       }
     }
+    // Tell the blocked user via FCM so they evict the room session even
+    // if the socket-borne event never reached them. Best-effort; the
+    // server-side block is already authoritative.
+    // No tap-deeplink: the user is now blocked from this room, so
+    // routing them back into it would just bounce them out again.
+    this.pushToUser(
+      targetUserId,
+      'You were removed from a room',
+      reason && reason.trim().length > 0
+        ? reason
+        : 'A host removed you from the room.',
+      {
+        kind: 'room.user.blocked',
+        roomId: room._id.toString(),
+      },
+    );
     return { ok: true };
   }
 

@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 
 import { AgoraModule } from '../agora/agora.module';
 import { CosmeticsModule } from '../cosmetics/cosmetics.module';
+import { FcmModule } from '../fcm/fcm.module';
 import { GiftsModule } from '../gifts/gifts.module';
 import { MagicBallModule } from '../magic-ball/magic-ball.module';
 import { User, UserSchema } from '../users/schemas/user.schema';
@@ -38,6 +39,10 @@ import { Room, RoomSchema } from './schemas/room.schema';
     // seat (leave / kick / displaced ghost), RoomsService records the
     // duration toward the user's `mic_minutes` Magic Ball counter.
     MagicBallModule,
+    // FCM fan-out for room events that the target user must hear about
+    // even when their socket is dead (screen-off / backgrounded): seat
+    // invites, kicks, blocks. See docs/backend/08-background-and-push.md.
+    FcmModule,
   ],
   controllers: [RoomsController, RoomsAdminController],
   providers: [RoomsService],
