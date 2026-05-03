@@ -130,7 +130,10 @@ export class RoomsService {
       return existing;
     }
 
-    const owner = await this.userModel.findById(ownerOid).select('displayName username').exec();
+    const owner = await this.userModel
+      .findById(ownerOid)
+      .select('displayName username avatarUrl')
+      .exec();
     if (!owner) throw new NotFoundException('Owner not found');
     const name =
       input.name?.trim() ||
@@ -138,6 +141,10 @@ export class RoomsService {
       owner.username?.trim() ||
       'My Room';
     const micCount = input.micCount ?? 8;
+    // Seed the room cover with the owner's avatar so newly-created
+    // rooms have a sensible identity image immediately. Owner can
+    // override later via the settings sheet's "Change Picture" row.
+    const coverUrl = owner.avatarUrl?.trim() ?? '';
 
     const room = await this.numericIds.createWithId(CounterScope.ROOM, (numericId) =>
       this.roomModel.create({
@@ -146,6 +153,7 @@ export class RoomsService {
         numericId,
         name,
         announcement: input.announcement?.trim() ?? '',
+        coverUrl,
         micCount,
         status: RoomStatus.ACTIVE,
       }),
@@ -305,6 +313,9 @@ export class RoomsService {
         input.password.length === 0
           ? ''
           : await bcrypt.hash(input.password, PASSWORD_BCRYPT_ROUNDS);
+    }
+    if (input.coverUrl !== undefined) {
+      room.coverUrl = input.coverUrl;
     }
     if (input.themeCosmeticId !== undefined) {
       // We only validate that it's a valid ObjectId here; ownership of the

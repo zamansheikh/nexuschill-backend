@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -10,8 +11,11 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 import {
   AuthenticatedUser,
@@ -19,6 +23,7 @@ import {
 } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { MediaService } from '../media/media.service';
 import {
   CreateRoomDto,
   EnterRoomDto,
@@ -40,6 +45,7 @@ export class RoomsController {
   constructor(
     private readonly rooms: RoomsService,
     private readonly gifts: GiftsService,
+    private readonly media: MediaService,
   ) {}
 
   // ---------- Lifecycle ----------
@@ -99,6 +105,45 @@ export class RoomsController {
     @Body() dto: UpdateRoomSettingsDto,
   ) {
     const room = await this.rooms.updateSettings(id, current.userId, dto);
+    return { room: room.toJSON() };
+  }
+
+  /// Owner-only: upload a new room cover picture. The image is sent to
+  /// Cloudinary, the resulting public URL is persisted on the room, and
+  /// ROOM_SETTINGS_UPDATED fires so every open client picks up the new
+  /// picture without a refetch. ~5 MB max; jpeg / png / webp.
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/cover')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+    }),
+  )
+  async uploadCover(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    if (!file) {
+      throw new BadRequestException({
+        code: 'IMAGE_REQUIRED',
+        message: 'No image uploaded',
+      });
+    }
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowed.includes(file.mimetype)) {
+      throw new BadRequestException({
+        code: 'INVALID_IMAGE_TYPE',
+        message: `Image must be one of ${allowed.join(', ')}`,
+        details: { received: file.mimetype },
+      });
+    }
+    const upload = await this.media.uploadImage(file.buffer, {
+      folder: `rooms/${id}/cover`,
+    });
+    const room = await this.rooms.updateSettings(id, current.userId, {
+      coverUrl: upload.secure_url,
+    });
     return { room: room.toJSON() };
   }
 

@@ -82,6 +82,14 @@ export class UpdateRoomSettingsDto {
   @MaxLength(64)
   password?: string;
 
+  /** Room cover picture URL. Empty string clears it (falls back to the
+   *  owner's avatar on the client). The cover-upload endpoint sets this
+   *  to the Cloudinary URL after the image upload completes. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  coverUrl?: string;
+
   /** Cosmetic ID (must be a ROOM_CARD owned + equipped by the user). */
   @IsOptional()
   @IsString()

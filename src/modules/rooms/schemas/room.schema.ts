@@ -113,6 +113,15 @@ export class Room {
   @Prop({ type: String, default: '', maxlength: 1000 })
   announcement!: string;
 
+  /**
+   * Room cover picture URL. Defaults to the owner's avatar at create
+   * time so the room has a sensible identity image immediately. Owner
+   * can override via the settings sheet — the new URL broadcasts via
+   * ROOM_SETTINGS_UPDATED so every client reflects the change live.
+   */
+  @Prop({ type: String, default: '' })
+  coverUrl!: string;
+
   /** Cosmetic the owner equipped as the room background (ROOM_CARD type). */
   @Prop({ type: Types.ObjectId, ref: 'CosmeticItem', default: null })
   themeCosmeticId?: Types.ObjectId | null;
