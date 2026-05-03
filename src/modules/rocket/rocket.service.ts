@@ -102,7 +102,8 @@ export class RocketService {
             enabled: true,
             timezone: 'Asia/Dhaka',
             topContributionThreshold: 120_000,
-            launchCountdownSeconds: 10,
+            launchCountdownSeconds: 20,
+            cascadeDelaySeconds: 30,
             levels: DEFAULT_LEVELS,
           },
         },
@@ -116,6 +117,7 @@ export class RocketService {
     timezone?: string;
     topContributionThreshold?: number;
     launchCountdownSeconds?: number;
+    cascadeDelaySeconds?: number;
     /** assetUrl + iconUrl optional on input — server falls back to ''. */
     levels?: Array<
       Omit<RocketLevel, 'assetUrl' | 'iconUrl'> & {
@@ -158,6 +160,9 @@ export class RocketService {
     }
     if (update.launchCountdownSeconds !== undefined) {
       set.launchCountdownSeconds = update.launchCountdownSeconds;
+    }
+    if (update.cascadeDelaySeconds !== undefined) {
+      set.cascadeDelaySeconds = update.cascadeDelaySeconds;
     }
     if (update.levels !== undefined) {
       set.levels = [...update.levels].sort((a, b) => a.level - b.level);
@@ -229,11 +234,22 @@ export class RocketService {
   ): Promise<void> {
     if (energyDelta <= 0) return;
     if (!Types.ObjectId.isValid(roomId) || !Types.ObjectId.isValid(senderId)) {
+      this.log.warn(
+        `addEnergy skipped — bad ids (roomId=${roomId}, senderId=${senderId})`,
+      );
       return;
     }
 
     const config = await this.getConfig();
-    if (!config.enabled || config.levels.length === 0) return;
+    if (!config.enabled || config.levels.length === 0) {
+      this.log.debug(
+        `addEnergy skipped — feature disabled or no levels configured`,
+      );
+      return;
+    }
+    this.log.debug(
+      `addEnergy room=${roomId} sender=${senderId} delta=${energyDelta}`,
+    );
 
     const dayKey = this.getDayKey(new Date());
     const roomOid = new Types.ObjectId(roomId);
@@ -292,6 +308,30 @@ export class RocketService {
       .findOne({ roomId: roomOid, dayKey })
       .exec();
     if (!fresh) return;
+
+    // Live fuel-update broadcast — fires on EVERY successful gift so
+    // the in-room gauge animates in real time. Uses the post-increment
+    // values so the client doesn't have to reconcile against a stale
+    // snapshot. Skipped if the rocket is already done for the day.
+    if (fresh.status !== RocketStatus.COMPLETE) {
+      const currentLv = config.levels.find(
+        (l) => l.level === fresh.currentLevel,
+      );
+      if (currentLv) {
+        void this.realtime.emitToRoom(
+          roomId,
+          RealtimeEventType.ROOM_ROCKET_FUEL,
+          {
+            roomId,
+            level: fresh.currentLevel,
+            currentEnergy: fresh.currentEnergy,
+            energyRequired: currentLv.energyRequired,
+            status: fresh.status,
+          },
+        );
+      }
+    }
+
     if (fresh.status !== RocketStatus.IDLE) return; // countdown already running, or complete
 
     const lv = config.levels.find((l) => l.level === fresh.currentLevel);
@@ -316,7 +356,7 @@ export class RocketService {
       .exec();
     if (flip.modifiedCount === 0) return;
 
-    // Broadcast — room listeners render the 10s countdown overlay.
+    // Broadcast — room listeners render the launch countdown overlay.
     void this.realtime.emitToRoom(roomId, RealtimeEventType.ROOM_ROCKET_LAUNCH, {
       roomId,
       level: fresh.currentLevel,
@@ -508,37 +548,75 @@ export class RocketService {
       }
     }
 
-    // 4. Advance state — append the launch record, reset energy,
-    //    bump level (or mark COMPLETE if there's no next level).
+    // 4. Advance state — append the launch record, carry the residual
+    //    energy over to the next level (so a single big gift can chain
+    //    multiple launches), bump the level (or mark COMPLETE if there's
+    //    no next level).
+    const launchedAt = new Date();
     const isLastLevel = !config.levels.find((l) => l.level === lv.level + 1);
+    const residualEnergy = Math.max(0, state.currentEnergy - lv.energyRequired);
     const launchRecord = {
       level: lv.level,
-      launchedAt: new Date(),
+      launchedAt,
       topContributors: top,
       randomBeneficiaries,
     };
+
+    // Decide whether to immediately queue the NEXT level for cascade
+    // launch. Only relevant if there's another level configured AND the
+    // residual energy already crosses its threshold. The cascade fires
+    // `cascadeDelaySeconds` after THIS launch (config-tunable, default 30s).
+    let cascadeQueued = false;
+    let cascadeCountdownStartedAt: Date | null = null;
+    let cascadeNextLevel: number | null = null;
+    if (!isLastLevel) {
+      const nextLv = config.levels.find((l) => l.level === lv.level + 1);
+      if (nextLv && residualEnergy >= nextLv.energyRequired) {
+        // Schedule the cascade: the sweeper fires when
+        //   countdownStartedAt + launchCountdownSeconds <= now,
+        // so we set it back-dated such that the *due* time lands exactly
+        // `cascadeDelaySeconds` after THIS launch finished.
+        const cascadeDueAt = new Date(
+          launchedAt.getTime() + config.cascadeDelaySeconds * 1000,
+        );
+        cascadeCountdownStartedAt = new Date(
+          cascadeDueAt.getTime() - config.launchCountdownSeconds * 1000,
+        );
+        cascadeQueued = true;
+        cascadeNextLevel = nextLv.level;
+      }
+    }
+
     await this.stateModel
       .updateOne(
         { _id: state._id, status: RocketStatus.COUNTDOWN },
         {
           $set: {
-            status: isLastLevel ? RocketStatus.COMPLETE : RocketStatus.IDLE,
+            status: isLastLevel
+              ? RocketStatus.COMPLETE
+              : cascadeQueued
+                ? RocketStatus.COUNTDOWN
+                : RocketStatus.IDLE,
             currentLevel: isLastLevel ? lv.level : lv.level + 1,
-            currentEnergy: 0,
-            countdownStartedAt: null,
+            currentEnergy: isLastLevel ? 0 : residualEnergy,
+            countdownStartedAt: cascadeQueued
+              ? cascadeCountdownStartedAt
+              : null,
           },
           $push: { launches: launchRecord },
         },
       )
       .exec();
 
+    const roomIdStr = state.roomId.toString();
+
     // 5. Broadcast — room renders the explosion + reward roster, global
     //    banner shows winners.
     void this.realtime.emitToRoom(
-      state.roomId.toString(),
+      roomIdStr,
       RealtimeEventType.ROOM_ROCKET_LAUNCH,
       {
-        roomId: state.roomId.toString(),
+        roomId: roomIdStr,
         level: lv.level,
         stage: 'launched',
         topContributors: top.map((t) => ({
@@ -554,6 +632,67 @@ export class RocketService {
         nextLevel: isLastLevel ? null : lv.level + 1,
       },
     );
+
+    // Live fuel update for the new level — gauge resets to the residual.
+    if (!isLastLevel) {
+      const nextLv = config.levels.find((l) => l.level === lv.level + 1);
+      if (nextLv) {
+        void this.realtime.emitToRoom(
+          roomIdStr,
+          RealtimeEventType.ROOM_ROCKET_FUEL,
+          {
+            roomId: roomIdStr,
+            level: nextLv.level,
+            currentEnergy: residualEnergy,
+            energyRequired: nextLv.energyRequired,
+            status: cascadeQueued
+              ? RocketStatus.COUNTDOWN
+              : RocketStatus.IDLE,
+          },
+        );
+      }
+    }
+
+    // Cascade banner — countdown event so the mobile flips its overlay
+    // to "Launching Lv.N+1 in X..." with the correct wait time.
+    if (cascadeQueued && cascadeNextLevel != null) {
+      const cascadeWaitSeconds = Math.max(
+        config.launchCountdownSeconds,
+        config.cascadeDelaySeconds,
+      );
+      void this.realtime.emitToRoom(
+        roomIdStr,
+        RealtimeEventType.ROOM_ROCKET_LAUNCH,
+        {
+          roomId: roomIdStr,
+          level: cascadeNextLevel,
+          countdownSeconds: config.cascadeDelaySeconds,
+          waitSeconds: cascadeWaitSeconds,
+          stage: 'countdown',
+          cascade: true,
+        },
+      );
+      // Global cascade banner — same treatment as the first launch so
+      // anyone in another room sees the next rocket coming.
+      const room = await this.roomModel
+        .findById(state.roomId)
+        .select({ name: 1, numericId: 1 })
+        .exec()
+        .catch(() => null);
+      void this.realtime.emitGlobal(
+        RealtimeEventType.GLOBAL_ROCKET_BANNER,
+        {
+          roomId: roomIdStr,
+          roomName: room?.name ?? '',
+          level: cascadeNextLevel,
+          triggeredById: '',
+          triggeredByName: 'Cascade',
+          triggeredByAvatarUrl: '',
+          countdownSeconds: config.cascadeDelaySeconds,
+          cascade: true,
+        },
+      );
+    }
   }
 
   // ============================================================

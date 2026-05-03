@@ -70,8 +70,14 @@ export class UpdateRocketConfigDto {
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(60)
+  @Max(120)
   launchCountdownSeconds?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(5)
+  @Max(300)
+  cascadeDelaySeconds?: number;
 
   @IsOptional()
   @IsArray()

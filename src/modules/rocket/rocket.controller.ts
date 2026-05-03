@@ -28,6 +28,7 @@ export class RocketController {
       timezone: config.timezone,
       topContributionThreshold: config.topContributionThreshold,
       launchCountdownSeconds: config.launchCountdownSeconds,
+      cascadeDelaySeconds: config.cascadeDelaySeconds,
       levels: config.levels,
     };
   }

@@ -42,6 +42,12 @@ export enum RealtimeEventType {
   /** A rocket has filled in this room and is launching now. */
   ROOM_ROCKET_LAUNCH = 'room.rocket.launch',
 
+  /** Live energy progress while a rocket is filling. Fired on every
+   *  successful gift contribution so the in-room fuel gauge animates
+   *  without a full state refetch. Payload:
+   *  `{ roomId, level, currentEnergy, energyRequired, status }`. */
+  ROOM_ROCKET_FUEL = 'room.rocket.fuel',
+
   /** A user dropped a Lucky Bag in this room. Payload: full LuckyBag
    *  document (sender hydrated). All members render the floating card +
    *  countdown; once `availableAt` passes, taps open the claim flow. */
