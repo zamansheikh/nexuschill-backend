@@ -147,6 +147,15 @@ export class Room {
   @Prop({ type: String, default: '', select: false })
   passwordHash!: string;
 
+  /**
+   * Mirror of `passwordHash.length > 0` as a public boolean — kept
+   * because `passwordHash` is `select: false` so the toJSON layer
+   * can't derive "is this room locked" without a separate field.
+   * Maintained alongside passwordHash in `updateSettings`.
+   */
+  @Prop({ type: Boolean, default: false })
+  hasPassword!: boolean;
+
   /** Number of guest seats (excluding owner seat at index 0). 8–15. */
   @Prop({ type: Number, default: 8, min: 4, max: 15 })
   micCount!: number;

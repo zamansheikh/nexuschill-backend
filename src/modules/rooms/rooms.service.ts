@@ -425,11 +425,14 @@ export class RoomsService implements OnModuleInit {
       room.micCount = input.micCount;
     }
     if (input.password !== undefined) {
-      // Empty string = clear password; non-empty = hash + set.
+      // Empty string = clear password; non-empty = hash + set. Mirror
+      // the boolean flag so listing endpoints can advertise locked
+      // rooms without selecting the hash.
       room.passwordHash =
         input.password.length === 0
           ? ''
           : await bcrypt.hash(input.password, PASSWORD_BCRYPT_ROUNDS);
+      room.hasPassword = input.password.length > 0;
     }
     if (input.coverUrl !== undefined) {
       room.coverUrl = input.coverUrl;

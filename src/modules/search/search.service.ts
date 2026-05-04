@@ -78,6 +78,7 @@ export class SearchService {
           ownerId: 1,
           viewerCount: 1,
           liveAt: 1,
+          hasPassword: 1,
         })
         .populate('ownerId', 'username displayName avatarUrl numericId')
         .lean()
@@ -118,6 +119,7 @@ export class SearchService {
           coverUrl: r.coverUrl ?? '',
           viewerCount: r.viewerCount ?? 0,
           liveAt: r.liveAt ?? null,
+          hasPassword: r.hasPassword ?? false,
           owner: owner
             ? {
                 id: owner._id.toString(),
