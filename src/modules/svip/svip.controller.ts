@@ -54,4 +54,29 @@ export class SvipController {
     const status = await this.svip.purchaseTier(current.userId, level);
     return { status };
   }
+
+  /**
+   * Activate an already-owned tier (set it as the user's currentLevel
+   * so badge / privileges show). Errors:
+   *   • 404 SVIP_TIER_NOT_FOUND — bad level number.
+   *   • 403 NOT_OWNED — caller doesn't own this tier yet.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('tiers/:level/activate')
+  async activateTier(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('level', ParseIntPipe) level: number,
+  ) {
+    const status = await this.svip.activateTier(current.userId, level);
+    return { status };
+  }
+
+  /** Hide the SVIP badge without giving up ownership. Sets
+   *  currentLevel = 0; ownedLevels stays as-is. */
+  @UseGuards(JwtAuthGuard)
+  @Post('deactivate')
+  async deactivate(@CurrentUser() current: AuthenticatedUser) {
+    const status = await this.svip.deactivate(current.userId);
+    return { status };
+  }
 }

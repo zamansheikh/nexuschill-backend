@@ -30,6 +30,17 @@ export class CreateSvipTierDto {
   @Min(0)
   coinReward?: number;
 
+  /** Required: every tier is purchasable with coins. Admins must price it. */
+  @IsInt()
+  @Min(1)
+  coinPrice!: number;
+
+  /** Days the directly-purchased tier lasts. 0 = permanent. Defaults to 30. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  durationDays?: number;
+
   @IsOptional()
   @IsString()
   @MaxLength(500)
@@ -82,6 +93,16 @@ export class UpdateSvipTierDto {
   @IsInt()
   @Min(0)
   coinReward?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  coinPrice?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  durationDays?: number;
 
   @IsOptional()
   @IsString()

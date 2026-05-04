@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -74,6 +75,8 @@ export class SvipService {
     if (update.monthlyPointsRequired !== undefined)
       t.monthlyPointsRequired = update.monthlyPointsRequired;
     if (update.coinReward !== undefined) t.coinReward = update.coinReward;
+    if (update.coinPrice !== undefined) t.coinPrice = update.coinPrice;
+    if (update.durationDays !== undefined) t.durationDays = update.durationDays;
     if (update.iconUrl !== undefined) t.iconUrl = update.iconUrl;
     if (update.iconPublicId !== undefined) t.iconPublicId = update.iconPublicId;
     if (update.bannerUrl !== undefined) t.bannerUrl = update.bannerUrl;
@@ -192,10 +195,14 @@ export class SvipService {
     }
 
     const status = await this.getOrCreateStatus(userId);
-    if (status.currentLevel >= level) {
+    // The user can own multiple non-overlapping tiers (e.g. SVIP1 +
+    // SVIP3). We only block the purchase if they ALREADY own this
+    // exact tier — buying a lower tier you don't own is fine, you
+    // just can't buy the same one twice.
+    if ((status.ownedLevels ?? []).includes(level)) {
       throw new ConflictException({
         code: 'ALREADY_OWNED',
-        message: 'You already hold this tier or higher',
+        message: 'You already own this tier',
       });
     }
 
@@ -229,9 +236,68 @@ export class SvipService {
         base.getTime() + tier.durationDays * 24 * 60 * 60 * 1000,
       );
     }
-    status.currentLevel = level;
+    // Track ownership; auto-activate this tier ONLY if it's higher
+    // than what they currently have on (so a user with SVIP3 buying
+    // SVIP1 keeps SVIP3 active, but a user with SVIP1 buying SVIP3
+    // gets bumped up to SVIP3).
+    const owned = new Set([...(status.ownedLevels ?? []), level]);
+    status.ownedLevels = Array.from(owned).sort((a, b) => a - b);
+    if (level > status.currentLevel) status.currentLevel = level;
     if (level > status.highestLevel) status.highestLevel = level;
     status.expiresAt = expiresAt;
+    await status.save();
+    return status;
+  }
+
+  /**
+   * Switch the user's active SVIP to a tier they already own.
+   * Used by the SVIP page's "Activate" button. Errors:
+   *   • 404 SVIP_TIER_NOT_FOUND — bad level number.
+   *   • 403 NOT_OWNED — caller doesn't own this tier yet.
+   */
+  async activateTier(
+    userId: string,
+    level: number,
+  ): Promise<UserSvipStatusDocument> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user id',
+      });
+    }
+    const tier = await this.getByLevel(level);
+    if (!tier || !tier.active) {
+      throw new NotFoundException({
+        code: 'SVIP_TIER_NOT_FOUND',
+        message: `SVIP tier ${level} not found`,
+      });
+    }
+    const status = await this.getOrCreateStatus(userId);
+    if (!(status.ownedLevels ?? []).includes(level)) {
+      throw new ForbiddenException({
+        code: 'NOT_OWNED',
+        message: 'You don\'t own this tier yet',
+      });
+    }
+    status.currentLevel = level;
+    await status.save();
+    return status;
+  }
+
+  /**
+   * Hide the user's SVIP badge / privileges without giving up
+   * ownership. They can re-activate any owned tier later. Setting
+   * currentLevel = 0 is the canonical "no SVIP active" state.
+   */
+  async deactivate(userId: string): Promise<UserSvipStatusDocument> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user id',
+      });
+    }
+    const status = await this.getOrCreateStatus(userId);
+    status.currentLevel = 0;
     await status.save();
     return status;
   }
