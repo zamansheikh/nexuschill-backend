@@ -3,7 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 
 import { MediaModule } from '../media/media.module';
 import { HonorsAdminController } from './honors-admin.controller';
-import { HonorsController } from './honors.controller';
+import { HonorsController, MeHonorsController } from './honors.controller';
 import { HonorsService } from './honors.service';
 import { HonorItem, HonorItemSchema } from './schemas/honor-item.schema';
 import { UserHonor, UserHonorSchema } from './schemas/user-honor.schema';
@@ -24,7 +24,7 @@ import { UserHonor, UserHonorSchema } from './schemas/user-honor.schema';
     ]),
     MediaModule,
   ],
-  controllers: [HonorsController, HonorsAdminController],
+  controllers: [HonorsController, MeHonorsController, HonorsAdminController],
   providers: [HonorsService],
   exports: [HonorsService],
 })

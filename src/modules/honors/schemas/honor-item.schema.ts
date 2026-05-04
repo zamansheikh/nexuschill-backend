@@ -3,20 +3,32 @@ import { HydratedDocument } from 'mongoose';
 
 export type HonorItemDocument = HydratedDocument<HonorItem>;
 
-/// Categorical bucket the badge belongs to. Drives section grouping
-/// on the mobile profile (Medal / Charm / Wealth / Special) and on
-/// the admin catalog filter dropdown.
+/// Categorical bucket the badge belongs to. Drives the tab strip on
+/// the Honor Wall page (Fortune / Connection / Gift / Experience /
+/// Constellation / Special / …) and the admin catalog filter
+/// dropdown. Old buckets (medal/charm/wealth/event) are kept so any
+/// rows created before this expansion still render — they just show
+/// up on a hidden "legacy" tab unless the admin re-tags them.
 export enum HonorCategory {
-  /// Generic medals — most things land here.
-  MEDAL = 'medal',
-  /// Charm-track achievements (received-gift values, charisma).
-  CHARM = 'charm',
-  /// Wealth-track achievements (sent-gift values, recharge tiers).
-  WEALTH = 'wealth',
-  /// Event / one-off promotional honors (anniversaries, tournaments).
-  EVENT = 'event',
-  /// Curated / hand-picked staff honors.
+  /// Wealth / coin-spend / recharge-driven medals (Billionaire, Big
+  /// Spender, Monthly Supporter).
+  FORTUNE = 'fortune',
+  /// Relationship-driven medals (CP levels, follower counts).
+  CONNECTION = 'connection',
+  /// Gift-driven medals (specific gifts sent / received milestones).
+  GIFT = 'gift',
+  /// Activity / level / experience medals (level, hours streamed,
+  /// games won).
+  EXPERIENCE = 'experience',
+  /// Time-of-year / themed / event medals (tournaments, holidays).
+  CONSTELLATION = 'constellation',
+  /// Curated / hand-picked staff honors that don't fit a bucket.
   SPECIAL = 'special',
+  // ---- Legacy values, kept for backwards compatibility ----
+  MEDAL = 'medal',
+  CHARM = 'charm',
+  WEALTH = 'wealth',
+  EVENT = 'event',
 }
 
 /// What kind of asset the icon is. Drives the renderer on the
@@ -61,7 +73,7 @@ export class HonorItem {
   @Prop({ type: String, default: '', maxlength: 300 })
   description!: string;
 
-  @Prop({ type: String, enum: HonorCategory, default: HonorCategory.MEDAL, index: true })
+  @Prop({ type: String, enum: HonorCategory, default: HonorCategory.SPECIAL, index: true })
   category!: HonorCategory;
 
   /** Cloudinary URL for the icon. Static image or SVGA file
@@ -81,10 +93,42 @@ export class HonorItem {
   })
   iconAssetType!: HonorAssetType;
 
-  /** Number of upgrade tiers this honor supports — 1..5 stars. The
-   *  current tier of a user is stored on UserHonor.tier. */
+  /** Number of upgrade tiers this honor supports — 1..10 stars. The
+   *  current tier of a user is stored on UserHonor.tier. Populated
+   *  automatically when `tiers` is provided (uses tiers.length). */
   @Prop({ type: Number, default: 5, min: 1, max: 10 })
   maxTier!: number;
+
+  /**
+   * Per-tier definitions. Each entry describes one level of this
+   * medal: its display name (e.g. "Lv.1"), the variant icon at that
+   * level, the numeric target the user has to hit to earn it, and
+   * the human-readable reward string (e.g. "Receive gifts worth
+   * 5,000,000,000 coins"). Mobile reads this to render the level-by-
+   * level progress card from the screenshots.
+   *
+   * Empty array means the medal is single-tier — `maxTier` controls
+   * the star count but no per-tier metadata exists. The grant flow
+   * still works either way.
+   */
+  @Prop({
+    type: [
+      {
+        name: { type: String, required: true, maxlength: 40 },
+        iconUrl: { type: String, default: '' },
+        target: { type: Number, default: 0, min: 0 },
+        rewardText: { type: String, default: '', maxlength: 200 },
+        _id: false,
+      },
+    ],
+    default: [],
+  })
+  tiers!: Array<{
+    name: string;
+    iconUrl: string;
+    target: number;
+    rewardText: string;
+  }>;
 
   /** Lower numbers come first on the mobile profile + admin list. */
   @Prop({ type: Number, default: 0 })

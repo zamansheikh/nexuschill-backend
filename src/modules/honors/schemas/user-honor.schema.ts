@@ -54,6 +54,25 @@ export class UserHonor {
   @Prop({ type: String, default: '', maxlength: 200 })
   note!: string;
 
+  /**
+   * Wearing slot on the user's Honor Wall (0..9, ten slots total).
+   * `-1` means "not worn". Service guarantees uniqueness — when the
+   * user wears a medal in a slot, any other medal in that slot
+   * (and any prior slot of this medal) is vacated.
+   */
+  @Prop({ type: Number, default: -1, min: -1, max: 9, index: true })
+  wornSlot!: number;
+
+  /**
+   * Current numeric progress toward the next tier's target. Used by
+   * the medal detail card to render the "800 / 5,000,000,000" style
+   * progress bar from the Billionaire screenshot. Bumped by the
+   * task system on game events (TODO) or set explicitly by an admin
+   * grant for manual overrides.
+   */
+  @Prop({ type: Number, default: 0, min: 0 })
+  progress!: number;
+
   @Prop({ type: Date, default: () => new Date() })
   awardedAt!: Date;
 }
@@ -61,3 +80,6 @@ export class UserHonor {
 export const UserHonorSchema = SchemaFactory.createForClass(UserHonor);
 UserHonorSchema.index({ userId: 1, honorItemId: 1 }, { unique: true });
 UserHonorSchema.index({ userId: 1, awardedAt: -1 });
+// Sparse-ish: most rows have wornSlot = -1 and don't need to look up
+// quickly. Index speeds up the "what's the user wearing?" path.
+UserHonorSchema.index({ userId: 1, wornSlot: 1 });

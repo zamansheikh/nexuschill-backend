@@ -145,15 +145,27 @@ export class HonorsService {
         message: `Honor key "${input.key}" already in use`,
       });
     }
+    const tiers = (input.tiers ?? []).map((t) => ({
+      name: t.name,
+      iconUrl: t.iconUrl ?? '',
+      target: t.target ?? 0,
+      rewardText: t.rewardText ?? '',
+    }));
+    // When the admin supplies a tiers array we derive maxTier from
+    // it — saves them having to keep the two in sync. Falls back to
+    // their explicit `maxTier` (or the legacy default) when no tiers
+    // are listed.
+    const maxTier = tiers.length > 0 ? tiers.length : (input.maxTier ?? 5);
     return this.itemModel.create({
       key: input.key,
       name: input.name,
       description: input.description ?? '',
-      category: input.category ?? HonorCategory.MEDAL,
+      category: input.category ?? HonorCategory.SPECIAL,
       iconUrl: input.iconUrl ?? '',
       iconPublicId: input.iconPublicId ?? '',
       iconAssetType: input.iconAssetType ?? HonorAssetType.IMAGE,
-      maxTier: input.maxTier ?? 5,
+      maxTier,
+      tiers,
       sortOrder: input.sortOrder ?? 0,
       active: input.active ?? true,
     });
@@ -174,7 +186,21 @@ export class HonorsService {
     if (update.iconAssetType !== undefined) {
       item.iconAssetType = update.iconAssetType;
     }
-    if (update.maxTier !== undefined) item.maxTier = update.maxTier;
+    if (update.tiers !== undefined) {
+      item.tiers = update.tiers.map((t) => ({
+        name: t.name,
+        iconUrl: t.iconUrl ?? '',
+        target: t.target ?? 0,
+        rewardText: t.rewardText ?? '',
+      }));
+      // Re-derive maxTier from the array length to keep them in sync.
+      item.maxTier = item.tiers.length > 0 ? item.tiers.length : item.maxTier;
+    }
+    if (update.maxTier !== undefined && (item.tiers?.length ?? 0) === 0) {
+      // Only let an explicit maxTier write through when the admin
+      // hasn't supplied tiers — otherwise tiers.length is the truth.
+      item.maxTier = update.maxTier;
+    }
     if (update.sortOrder !== undefined) item.sortOrder = update.sortOrder;
     if (update.active !== undefined) item.active = update.active;
     await item.save();
@@ -297,6 +323,185 @@ export class HonorsService {
       { honorRef: key, tier },
       { source: HonorSource.TASK },
     );
+  }
+
+  // ============== Wear / Unwear (Honor Wall slots) ==============
+
+  /**
+   * Wear a medal in `slot` (0..9) on the user's Honor Wall. Enforces
+   * the two invariants the UI cares about:
+   *
+   *   1. Each slot holds at most one medal — anyone else parked in
+   *      this slot gets vacated first.
+   *   2. Each medal occupies at most one slot — if the user moves
+   *      a medal from slot 2 to slot 5, slot 2 is freed.
+   *
+   * Throws 404 if the medal isn't in the user's inventory.
+   */
+  async wear(
+    userId: string,
+    userHonorId: string,
+    slot: number,
+  ): Promise<UserHonorDocument> {
+    if (
+      !Types.ObjectId.isValid(userId) ||
+      !Types.ObjectId.isValid(userHonorId)
+    ) {
+      throw new BadRequestException({
+        code: 'INVALID_ID',
+        message: 'Invalid id',
+      });
+    }
+    if (slot < 0 || slot > 9) {
+      throw new BadRequestException({
+        code: 'INVALID_SLOT',
+        message: 'Slot must be 0..9',
+      });
+    }
+    const userOid = new Types.ObjectId(userId);
+    const owned = await this.userHonorModel.findById(userHonorId).exec();
+    if (!owned || !owned.userId.equals(userOid)) {
+      throw new NotFoundException({
+        code: 'HONOR_NOT_OWNED',
+        message: 'You don\'t hold this honor',
+      });
+    }
+    // Free anyone else parked in this slot. The unique-on-slot
+    // semantics mean this updateMany only ever touches at most one
+    // doc, but using updateMany lets the DB layer atomically clear
+    // any stale rows from prior bugs.
+    await this.userHonorModel
+      .updateMany(
+        { userId: userOid, wornSlot: slot },
+        { $set: { wornSlot: -1 } },
+      )
+      .exec();
+    owned.wornSlot = slot;
+    await owned.save();
+    return owned;
+  }
+
+  /** Take the medal off the wall — wornSlot back to -1. Idempotent. */
+  async unwear(
+    userId: string,
+    userHonorId: string,
+  ): Promise<UserHonorDocument> {
+    if (
+      !Types.ObjectId.isValid(userId) ||
+      !Types.ObjectId.isValid(userHonorId)
+    ) {
+      throw new BadRequestException({
+        code: 'INVALID_ID',
+        message: 'Invalid id',
+      });
+    }
+    const owned = await this.userHonorModel.findById(userHonorId).exec();
+    if (!owned || owned.userId.toString() !== userId) {
+      throw new NotFoundException({
+        code: 'HONOR_NOT_OWNED',
+        message: 'You don\'t hold this honor',
+      });
+    }
+    if (owned.wornSlot !== -1) {
+      owned.wornSlot = -1;
+      await owned.save();
+    }
+    return owned;
+  }
+
+  /**
+   * Public read for any user — returns just the medals they have
+   * worn on their Honor Wall, ordered by slot. Profile screens hit
+   * this for the "wearing strip" / hero-strip display.
+   */
+  async listWornForUser(userId: string) {
+    if (!Types.ObjectId.isValid(userId)) return { items: [] };
+    const rows = await this.userHonorModel
+      .find({ userId: new Types.ObjectId(userId), wornSlot: { $gte: 0 } })
+      .sort({ wornSlot: 1 })
+      .populate('honorItemId')
+      .lean()
+      .exec();
+    const items = rows
+      .map((r) => {
+        const item = r.honorItemId as unknown as HonorItem & {
+          _id: Types.ObjectId;
+          active: boolean;
+          tiers?: HonorItem['tiers'];
+        };
+        if (!item || item.active === false) return null;
+        // Resolve the tier-specific icon when the catalog has tier
+        // metadata; falls back to the top-level icon for legacy rows.
+        const tierIdx = Math.max(0, Math.min((r.tier ?? 1) - 1, (item.tiers?.length ?? 1) - 1));
+        const tierIcon = item.tiers?.[tierIdx]?.iconUrl?.trim();
+        return {
+          id: r._id.toString(),
+          honorItemId: item._id.toString(),
+          key: item.key,
+          name: item.name,
+          category: item.category,
+          iconUrl: (tierIcon && tierIcon.length > 0) ? tierIcon : item.iconUrl,
+          iconAssetType: item.iconAssetType ?? HonorAssetType.IMAGE,
+          tier: r.tier,
+          maxTier: item.maxTier,
+          wornSlot: r.wornSlot,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+    return { items };
+  }
+
+  /**
+   * Mobile Honor Wall feed — every active catalog row, merged with
+   * the caller's per-honor state (owned? what tier? worn? progress?).
+   * One round-trip + one zip in code beats fetching catalog separately
+   * and joining client-side, especially since the page tabs show
+   * locked + unlocked together with progress on each.
+   */
+  async listMyHonors(userId: string) {
+    const all = await this.itemModel
+      .find({ active: true })
+      .sort({ category: 1, sortOrder: 1, name: 1 })
+      .lean()
+      .exec();
+    const owned = Types.ObjectId.isValid(userId)
+      ? await this.userHonorModel
+          .find({ userId: new Types.ObjectId(userId) })
+          .lean()
+          .exec()
+      : [];
+    const ownedByItem = new Map<string, (typeof owned)[number]>();
+    for (const o of owned) ownedByItem.set(o.honorItemId.toString(), o);
+
+    const items = all.map((item) => {
+      const o = ownedByItem.get(item._id.toString());
+      const tiers = (item.tiers ?? []) as HonorItem['tiers'];
+      return {
+        // Catalog fields
+        honorItemId: item._id.toString(),
+        key: item.key,
+        name: item.name,
+        description: item.description ?? '',
+        category: item.category,
+        iconUrl: item.iconUrl ?? '',
+        iconAssetType: item.iconAssetType ?? HonorAssetType.IMAGE,
+        maxTier: item.maxTier,
+        tiers: tiers.map((t) => ({
+          name: t.name,
+          iconUrl: t.iconUrl ?? '',
+          target: t.target ?? 0,
+          rewardText: t.rewardText ?? '',
+        })),
+        sortOrder: item.sortOrder ?? 0,
+        // Per-user state — null when not owned
+        userHonorId: o ? o._id.toString() : null,
+        owned: o != null,
+        tier: o?.tier ?? 0,
+        progress: o?.progress ?? 0,
+        wornSlot: o?.wornSlot ?? -1,
+      };
+    });
+    return { items };
   }
 
   async revokeFromUser(

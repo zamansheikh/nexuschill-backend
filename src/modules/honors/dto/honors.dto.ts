@@ -1,4 +1,6 @@
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsInt,
@@ -10,12 +12,35 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 
 import {
   HonorAssetType,
   HonorCategory,
 } from '../schemas/honor-item.schema';
+
+/** Per-tier definition payload — see HonorItem.tiers in the schema. */
+export class HonorTierDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  iconUrl?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  target?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  rewardText?: string;
+}
 
 export class CreateHonorItemDto {
   @IsString()
@@ -65,6 +90,12 @@ export class CreateHonorItemDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => HonorTierDto)
+  tiers?: HonorTierDto[];
 }
 
 export class UpdateHonorItemDto {
@@ -108,6 +139,20 @@ export class UpdateHonorItemDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => HonorTierDto)
+  tiers?: HonorTierDto[];
+}
+
+export class WearHonorDto {
+  /** 0..9. Service rejects any other value. */
+  @IsInt()
+  @Min(0)
+  @Max(9)
+  slot!: number;
 }
 
 export class GrantHonorDto {
