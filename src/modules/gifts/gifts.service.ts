@@ -739,45 +739,155 @@ export class GiftsService {
     return { items, page, limit, total };
   }
 
-  /** Aggregate top gifts a user has received, grouped by gift type. */
+  /**
+   * Aggregate the user's gift wall — both sides of every gift type
+   * they've ever interacted with. We run two parallel aggregations
+   * (one for received, one for sent) and merge by giftId so the
+   * profile can show "received ×N / sent ×M" per row. A gift only
+   * sent or only received still surfaces, with the other side at 0.
+   */
   async giftWall(userId: string, limit = 20) {
     if (!Types.ObjectId.isValid(userId)) return [];
-    return this.eventModel
-      .aggregate([
-        { $match: { receiverId: new Types.ObjectId(userId), status: 'completed' } },
-        {
-          $group: {
-            _id: '$giftId',
-            totalCount: { $sum: '$count' },
-            totalDiamonds: { $sum: '$totalDiamondReward' },
-            lastReceived: { $max: '$createdAt' },
-          },
+    const uid = new Types.ObjectId(userId);
+
+    const receivedPipeline = [
+      { $match: { receiverId: uid, status: 'completed' } },
+      {
+        $group: {
+          _id: '$giftId',
+          totalCount: { $sum: '$count' },
+          totalDiamonds: { $sum: '$totalDiamondReward' },
+          lastReceived: { $max: '$createdAt' },
         },
-        { $sort: { totalCount: -1, lastReceived: -1 } },
-        { $limit: limit },
-        {
-          $lookup: {
-            from: 'gifts',
-            localField: '_id',
-            foreignField: '_id',
-            as: 'gift',
-          },
+      },
+    ];
+    const sentPipeline = [
+      { $match: { senderId: uid, status: 'completed' } },
+      {
+        $group: {
+          _id: '$giftId',
+          sentCount: { $sum: '$count' },
+          sentDiamonds: { $sum: '$totalDiamondReward' },
+          lastSent: { $max: '$createdAt' },
         },
-        { $unwind: '$gift' },
-        {
-          $project: {
-            _id: 0,
-            giftId: '$_id',
-            code: '$gift.code',
-            name: '$gift.name',
-            thumbnailUrl: '$gift.thumbnailUrl',
-            totalCount: 1,
-            totalDiamonds: 1,
-            lastReceived: 1,
-          },
-        },
-      ])
+      },
+    ];
+
+    const [receivedRows, sentRows] = await Promise.all([
+      this.eventModel.aggregate(receivedPipeline).exec(),
+      this.eventModel.aggregate(sentPipeline).exec(),
+    ]);
+
+    type RecvRow = {
+      _id: Types.ObjectId;
+      totalCount: number;
+      totalDiamonds: number;
+      lastReceived: Date;
+    };
+    type SentRow = {
+      _id: Types.ObjectId;
+      sentCount: number;
+      sentDiamonds: number;
+      lastSent: Date;
+    };
+
+    const merged = new Map<
+      string,
+      {
+        giftId: Types.ObjectId;
+        totalCount: number;
+        totalDiamonds: number;
+        sentCount: number;
+        sentDiamonds: number;
+        lastReceived: Date | null;
+        lastSent: Date | null;
+      }
+    >();
+    for (const r of receivedRows as RecvRow[]) {
+      merged.set(r._id.toString(), {
+        giftId: r._id,
+        totalCount: r.totalCount,
+        totalDiamonds: r.totalDiamonds,
+        sentCount: 0,
+        sentDiamonds: 0,
+        lastReceived: r.lastReceived,
+        lastSent: null,
+      });
+    }
+    for (const s of sentRows as SentRow[]) {
+      const key = s._id.toString();
+      const existing = merged.get(key);
+      if (existing) {
+        existing.sentCount = s.sentCount;
+        existing.sentDiamonds = s.sentDiamonds;
+        existing.lastSent = s.lastSent;
+      } else {
+        merged.set(key, {
+          giftId: s._id,
+          totalCount: 0,
+          totalDiamonds: 0,
+          sentCount: s.sentCount,
+          sentDiamonds: s.sentDiamonds,
+          lastReceived: null,
+          lastSent: s.lastSent,
+        });
+      }
+    }
+
+    // Sort by combined activity then most-recent. Caps to `limit`
+    // so a heavy gifter doesn't blow up the payload.
+    const ordered = [...merged.values()].sort((a, b) => {
+      const ac = a.totalCount + a.sentCount;
+      const bc = b.totalCount + b.sentCount;
+      if (ac !== bc) return bc - ac;
+      const at = Math.max(
+        a.lastReceived?.getTime() ?? 0,
+        a.lastSent?.getTime() ?? 0,
+      );
+      const bt = Math.max(
+        b.lastReceived?.getTime() ?? 0,
+        b.lastSent?.getTime() ?? 0,
+      );
+      return bt - at;
+    });
+    const top = ordered.slice(0, limit);
+    if (top.length === 0) return [];
+
+    // Hydrate gift catalog metadata in one round-trip.
+    const giftIds = top.map((r) => r.giftId);
+    const gifts = await this.giftModel
+      .find({ _id: { $in: giftIds } })
+      .select({ code: 1, name: 1, thumbnailUrl: 1 })
+      .lean()
       .exec();
+    const giftById = new Map(gifts.map((g) => [g._id.toString(), g]));
+
+    return top
+      .map((r) => {
+        const g = giftById.get(r.giftId.toString());
+        if (!g) return null;
+        // Flatten the localized `name` to a single display string —
+        // mobile parses `name` as a plain string. Prefer English,
+        // fall back to Bangla, then code.
+        const localized = g.name as { en?: string; bn?: string } | string;
+        const displayName =
+          typeof localized === 'string'
+            ? localized
+            : (localized?.en?.trim() || localized?.bn?.trim() || g.code);
+        return {
+          giftId: r.giftId,
+          code: g.code,
+          name: displayName,
+          thumbnailUrl: g.thumbnailUrl,
+          totalCount: r.totalCount,
+          totalDiamonds: r.totalDiamonds,
+          sentCount: r.sentCount,
+          sentDiamonds: r.sentDiamonds,
+          lastReceived: r.lastReceived,
+          lastSent: r.lastSent,
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
   }
 
   async listAllEvents(params: {
