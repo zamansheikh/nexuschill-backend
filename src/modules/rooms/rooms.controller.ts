@@ -372,6 +372,19 @@ export class RoomsController {
     return { message };
   }
 
+  /** Owner / admin wipes the room's chat. Service enforces the auth
+   *  check; everyone connected receives `ROOM_CHAT_CLEANED` and clears
+   *  their local scrollback. */
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/chat/clean')
+  async cleanChat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.rooms.cleanChat(id, current.userId);
+  }
+
   // ---------- Gift transaction history ----------
 
   /// Active member roster — drives the "Online Users" bottom sheet

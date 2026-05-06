@@ -1549,6 +1549,41 @@ export class RoomsService implements OnModuleInit {
     return json;
   }
 
+  /**
+   * Owner / admin wipes the room's chat scrollback. Bulk-marks every
+   * ACTIVE message as REMOVED (so a refetch returns nothing) and emits
+   * `ROOM_CHAT_CLEANED` so every connected member drops their local
+   * scrollback without reloading. Idempotent — calling it on an empty
+   * room is a no-op past the auth check.
+   */
+  async cleanChat(roomId: string, actorId: string) {
+    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    const actorOid = new Types.ObjectId(actorId);
+
+    const result = await this.chatModel
+      .updateMany(
+        { roomId: room._id, status: RoomChatStatus.ACTIVE },
+        {
+          $set: {
+            status: RoomChatStatus.REMOVED,
+            removedBy: actorOid,
+          },
+        },
+      )
+      .exec();
+
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.ROOM_CHAT_CLEANED,
+      {
+        clearedBy: actorId,
+        clearedAt: new Date().toISOString(),
+      },
+    );
+
+    return { cleared: result.modifiedCount };
+  }
+
   // ============== Admin moderation ==============
 
   async adminRemove(roomId: string, reason: string, adminId?: string) {

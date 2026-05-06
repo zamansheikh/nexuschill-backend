@@ -31,6 +31,13 @@ export enum RealtimeEventType {
    *  with author hydrated. */
   ROOM_CHAT_MESSAGE = 'room.chat.message',
 
+  /** Owner / admin wiped the room's chat scrollback. Payload:
+   *  `{ clearedBy: string, clearedAt: string }` — receivers drop their
+   *  local scrollback so every member sees a fresh chat. The persisted
+   *  messages are flagged `REMOVED` server-side, so a refetch returns
+   *  an empty list. */
+  ROOM_CHAT_CLEANED = 'room.chat.cleaned',
+
   /** Gift sent in this room — drives the SVGA overlay + banner. */
   ROOM_GIFT_SENT = 'room.gift.sent',
 
