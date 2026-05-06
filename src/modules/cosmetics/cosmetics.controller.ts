@@ -8,8 +8,69 @@ import {
 } from '@nestjs/common';
 
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CosmeticsService } from './cosmetics.service';
+
+/**
+ * Public, read-only listing of any user's owned cosmetics. Powers
+ * the "Vehicle / Frame / Theme" sections on the public profile
+ * page. We strip expired rows and the per-user external ref so the
+ * payload only carries what's needed to render — name, type, icon,
+ * equipped flag — keeping the public profile flow a single small
+ * round-trip per section.
+ */
+@Controller({ path: 'cosmetics', version: '1' })
+export class PublicCosmeticsController {
+  constructor(private readonly cosmetics: CosmeticsService) {}
+
+  @Public()
+  @Get('users/:userId')
+  async forUser(@Param('userId') userId: string) {
+    const rows = await this.cosmetics.listUserCosmetics(userId);
+    // Drop expired rows + flatten the populated cosmetic item into
+    // the visible projection. The mobile renderer only needs the
+    // catalog metadata + the equipped flag.
+    const now = new Date();
+    const items = rows
+      .filter((r) => r.expiresAt == null || r.expiresAt > now)
+      .map((r) => {
+        const item = r.cosmeticItemId as unknown as
+          | {
+              _id: { toString(): string };
+              code: string;
+              name: { en: string; bn?: string };
+              type: string;
+              previewUrl?: string;
+              assetType?: string;
+              assetUrl?: string;
+              rarity?: number;
+            }
+          | null;
+        return {
+          id: r._id.toString(),
+          equipped: r.equipped,
+          source: r.source,
+          svipTier: r.svipTier ?? null,
+          acquiredAt: r.acquiredAt,
+          cosmetic: item
+            ? {
+                id: item._id.toString(),
+                code: item.code,
+                name: item.name,
+                type: item.type,
+                previewUrl: item.previewUrl ?? '',
+                assetType: item.assetType ?? 'image',
+                assetUrl: item.assetUrl ?? '',
+                rarity: item.rarity ?? 1,
+              }
+            : null,
+        };
+      })
+      .filter((r) => r.cosmetic != null);
+    return { items };
+  }
+}
 
 /**
  * User-facing inventory endpoints. The admin counterpart is
