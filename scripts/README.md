@@ -13,10 +13,10 @@ The `appleboy/ssh-action` step in [.github/workflows/deploy.yml](../.github/work
 
 1. **On a fresh Debian/Ubuntu server**, run:
    ```bash
-   curl -sSL https://raw.githubusercontent.com/zamansheikh/nexuschill-backend/main/scripts/server-bootstrap.sh \
-     | bash -s -- https://github.com/zamansheikh/nexuschill-backend.git
+   curl -sSL https://raw.githubusercontent.com/zamansheikh/zimolive-backend/main/scripts/server-bootstrap.sh \
+     | bash -s -- https://github.com/zamansheikh/zimolive-backend.git
    ```
-   This installs Docker + Compose, clones the repo to `/opt/nexuschill-backend`, opens UFW for SSH + port 3000, and prints the manual steps below.
+   This installs Docker + Compose, clones the repo to `/opt/zimolive-backend`, opens UFW for SSH + port 3000, and prints the manual steps below.
 
 2. **Drop in `.env`** — copy from `.env.example` and fill in real secrets (MongoDB URI, JWT secrets, Cloudinary keys, etc.).
 
@@ -36,13 +36,13 @@ If you don't already have one dedicated to CI:
 
 ```bash
 # On your laptop — DON'T reuse a personal key
-ssh-keygen -t ed25519 -C "github-actions@nexuschill-backend" -f ~/.ssh/nexuschill_deploy
+ssh-keygen -t ed25519 -C "github-actions@zimolive-backend" -f ~/.ssh/zimolive_deploy
 
 # Copy the public key to the server
-ssh-copy-id -i ~/.ssh/nexuschill_deploy.pub root@31.97.15.225
+ssh-copy-id -i ~/.ssh/zimolive_deploy.pub root@31.97.15.225
 
 # Print the private key (paste into GitHub secret SSH_PRIVATE_KEY)
-cat ~/.ssh/nexuschill_deploy
+cat ~/.ssh/zimolive_deploy
 ```
 
 ## What `deploy.sh` checks
@@ -50,7 +50,7 @@ cat ~/.ssh/nexuschill_deploy
 Before touching containers, it validates:
 
 1. `git`, `docker`, `docker compose`, `curl` are installed.
-2. Repo at `/opt/nexuschill-backend` exists with a working `.git`.
+2. Repo at `/opt/zimolive-backend` exists with a working `.git`.
 3. `.env` is present (operator-managed; never overwritten).
 4. `secrets/firebase-service-account.json` is present and has a `private_key` field — warns if missing (FCM will silently no-op).
 5. Docker daemon is reachable.
@@ -71,10 +71,10 @@ If you ever want to redeploy without pushing a commit:
 
 ```bash
 # On the server
-nexuschill-deploy
+zimolive-deploy
 ```
 
-(`server-bootstrap.sh` symlinked `scripts/deploy.sh` → `/usr/local/bin/nexuschill-deploy`.)
+(`server-bootstrap.sh` symlinked `scripts/deploy.sh` → `/usr/local/bin/zimolive-deploy`.)
 
 You can also re-trigger the GitHub Actions workflow from the repo's Actions tab → **Deploy backend** → **Run workflow**.
 
@@ -91,7 +91,7 @@ Or skip CI and roll back directly on the server:
 
 ```bash
 ssh root@31.97.15.225
-cd /opt/nexuschill-backend
+cd /opt/zimolive-backend
 git reset --hard <known-good-sha>
-nexuschill-deploy
+zimolive-deploy
 ```

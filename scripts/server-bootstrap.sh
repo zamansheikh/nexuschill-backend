@@ -5,9 +5,9 @@
 # Idempotent — re-running on an already-set-up box is a no-op.
 #
 # Usage (on the server, as root):
-#   curl -sSL https://raw.githubusercontent.com/zamansheikh/nexuschill-backend/main/scripts/server-bootstrap.sh | bash -s -- https://github.com/zamansheikh/nexuschill-backend.git
+#   curl -sSL https://raw.githubusercontent.com/zamansheikh/zimolive-backend/main/scripts/server-bootstrap.sh | bash -s -- https://github.com/zamansheikh/zimolive-backend.git
 # OR (after a manual git clone):
-#   bash scripts/server-bootstrap.sh https://github.com/zamansheikh/nexuschill-backend.git
+#   bash scripts/server-bootstrap.sh https://github.com/zamansheikh/zimolive-backend.git
 #
 # After this finishes, follow the post-install steps it prints to:
 #   1. drop in .env (copy from .env.example, fill secrets)
@@ -16,12 +16,12 @@
 # =============================================================================
 set -euo pipefail
 
-DEPLOY_DIR="${DEPLOY_DIR:-/opt/nexuschill-backend}"
+DEPLOY_DIR="${DEPLOY_DIR:-/opt/zimolive-backend}"
 REPO_URL="${1:-}"
 
 if [ -z "$REPO_URL" ] && [ ! -d "$DEPLOY_DIR/.git" ]; then
   echo "Usage: $0 <git-repo-url>"
-  echo "  e.g. $0 https://github.com/zamansheikh/nexuschill-backend.git"
+  echo "  e.g. $0 https://github.com/zamansheikh/zimolive-backend.git"
   exit 1
 fi
 
@@ -102,9 +102,9 @@ ok "UFW configured (ssh + 3000 open)"
 
 # --- 5. Helpful symlink so `deploy` is on PATH ----------------------------
 
-if [ ! -L /usr/local/bin/nexuschill-deploy ]; then
-  ln -sf "$DEPLOY_DIR/scripts/deploy.sh" /usr/local/bin/nexuschill-deploy
-  ok "Linked /usr/local/bin/nexuschill-deploy → scripts/deploy.sh"
+if [ ! -L /usr/local/bin/zimolive-deploy ]; then
+  ln -sf "$DEPLOY_DIR/scripts/deploy.sh" /usr/local/bin/zimolive-deploy
+  ok "Linked /usr/local/bin/zimolive-deploy → scripts/deploy.sh"
 fi
 
 # --- 6. Print next steps --------------------------------------------------
@@ -137,5 +137,5 @@ $(c_bold 'Manual steps still required before the first deploy:')
   4. Push to main. CI runs scripts/deploy.sh automatically.
 
   $(c_bold 'Manual deploy (without CI):')
-       nexuschill-deploy
+       zimolive-deploy
 EOF

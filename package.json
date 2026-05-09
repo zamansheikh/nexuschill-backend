@@ -1,8 +1,8 @@
 {
-  "name": "nexuschill-backend",
+  "name": "zimolive-backend",
   "version": "0.1.0",
-  "description": "NexusChill backend — Node.js + NestJS + MongoDB + Redis",
-  "author": "NexusChill Team",
+  "description": "Zimo Live backend — Node.js + NestJS + MongoDB + Redis",
+  "author": "Zimo Live Team",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {

@@ -9,7 +9,7 @@ export class AppController {
   health() {
     return {
       status: 'ok',
-      service: 'nexuschill-backend',
+      service: 'zimolive-backend',
       time: new Date().toISOString(),
     };
   }

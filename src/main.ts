@@ -51,7 +51,7 @@ async function bootstrap() {
   await app.listen(port);
 
   const logger = app.get(Logger);
-  logger.log(`NexusChill backend running on http://localhost:${port}/${apiPrefix}/v${apiVersion}`);
+  logger.log(`Zimo Live backend running on http://localhost:${port}/${apiPrefix}/v${apiVersion}`);
 }
 
 bootstrap();

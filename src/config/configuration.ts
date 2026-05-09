@@ -6,7 +6,7 @@ export const configuration = () => ({
     version: process.env.API_VERSION || 'v1',
   },
   mongodb: {
-    uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/nexuschill',
+    uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/party_app',
   },
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
@@ -63,7 +63,7 @@ export const configuration = () => ({
     user: process.env.EMAIL_USER || '',
     pass: process.env.EMAIL_PASS || '',
     sendgridApiKey: process.env.SENDGRID_API_KEY,
-    from: process.env.EMAIL_FROM || 'no-reply@nexuschill.com',
+    from: process.env.EMAIL_FROM || 'no-reply@zimolive.com',
   },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',

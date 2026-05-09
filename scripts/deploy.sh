@@ -11,7 +11,7 @@ set -euo pipefail
 # --- Config -----------------------------------------------------------------
 
 # Repo root on the server. server-bootstrap.sh clones here.
-DEPLOY_DIR="${DEPLOY_DIR:-/opt/nexuschill-backend}"
+DEPLOY_DIR="${DEPLOY_DIR:-/opt/zimolive-backend}"
 # Where the Firebase service-account JSON must exist on the host —
 # docker-compose.yml bind-mounts this into the container.
 FIREBASE_CRED_PATH="${DEPLOY_DIR}/secrets/firebase-service-account.json"

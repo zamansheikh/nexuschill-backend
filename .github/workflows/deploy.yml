@@ -32,11 +32,11 @@ jobs:
           # deploy script itself uses `set -euo pipefail` for the
           # same reason; this is belt-and-suspenders.
           script_stop: true
-          # The repo must be cloned at /opt/nexuschill-backend before
+          # The repo must be cloned at /opt/zimolive-backend before
           # the first run — see scripts/server-bootstrap.sh.
           script: |
             set -euo pipefail
-            cd /opt/nexuschill-backend
+            cd /opt/zimolive-backend
             echo "→ Fetching origin/main…"
             git fetch --quiet origin main
             git reset --hard origin/main
