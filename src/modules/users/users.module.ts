@@ -9,6 +9,10 @@ import {
   FamilyMember,
   FamilyMemberSchema,
 } from '../families/schemas/family-member.schema';
+import {
+  DeviceToken,
+  DeviceTokenSchema,
+} from '../fcm/schemas/device-token.schema';
 import { HonorsModule } from '../honors/honors.module';
 import { Room, RoomSchema } from '../rooms/schemas/room.schema';
 import { SocialModule } from '../social/social.module';
@@ -42,6 +46,11 @@ import { UsersService } from './users.service';
       { name: Family.name, schema: FamilySchema },
       { name: FamilyMember.name, schema: FamilyMemberSchema },
       { name: UserSvipStatus.name, schema: UserSvipStatusSchema },
+      // Direct model access so account deletion can drop the user's
+      // push tokens atomically alongside the user-doc anonymisation,
+      // without an indirect call into FcmModule (avoids a cycle —
+      // FcmModule already imports UsersModule for auth context).
+      { name: DeviceToken.name, schema: DeviceTokenSchema },
     ]),
     // SocialModule is a leaf in our module graph — it imports User
     // schema via forFeature but NOT UsersModule, so this arrow is

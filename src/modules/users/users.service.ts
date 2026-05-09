@@ -18,6 +18,10 @@ import {
   FamilyMemberDocument,
   FamilyMemberStatus,
 } from '../families/schemas/family-member.schema';
+import {
+  DeviceToken,
+  DeviceTokenDocument,
+} from '../fcm/schemas/device-token.schema';
 import { Room, RoomDocument } from '../rooms/schemas/room.schema';
 import {
   UserSvipStatus,
@@ -56,6 +60,8 @@ export class UsersService {
     private readonly familyMemberModel: Model<FamilyMemberDocument>,
     @InjectModel(UserSvipStatus.name)
     private readonly svipStatusModel: Model<UserSvipStatusDocument>,
+    @InjectModel(DeviceToken.name)
+    private readonly deviceTokenModel: Model<DeviceTokenDocument>,
     private readonly numericIds: NumericIdService,
   ) {}
 
@@ -418,6 +424,99 @@ export class UsersService {
     user.coverPhotoPublicId = publicId;
     await user.save();
     return user;
+  }
+
+  // -------------------- Account deletion (user-initiated) --------------------
+
+  /**
+   * Soft-deletes the current user's account in line with the in-app
+   * "Delete Account" flow required by the Play Store.
+   *
+   * What happens:
+   *   • status → DELETED (auth.assertActive rejects login afterwards).
+   *   • PII fields (email, phone, username, googleId, facebookId, appleId,
+   *     dateOfBirth, passwordHash) are $unset so the sparse-unique
+   *     indexes free up and the same Google account can register fresh.
+   *   • displayName → "Deleted User", avatar/cover/bio cleared so any
+   *     legacy references to this userId render anonymously.
+   *   • All FCM device tokens for this user are dropped — push stops
+   *     immediately and the next sign-in on the same handset registers
+   *     a new (user, device) row.
+   *
+   * Intentionally NOT done here:
+   *   • Hard delete of the user document (numericId references in
+   *     transactions/rooms/family rosters would dangle).
+   *   • Cascade on transactions / financial records — kept for tax /
+   *     audit obligations (see Refund Policy).
+   *   • Cloudinary asset cleanup — handled in the controller next to
+   *     the existing MediaService dependency, so this method has no
+   *     external-side-effects of its own.
+   *
+   * Returns the snapshot taken BEFORE the anonymisation so the caller
+   * (controller) can clean up media using the original public IDs.
+   */
+  async softDeleteAccount(userId: string): Promise<{
+    avatarPublicId: string;
+    coverPhotoPublicId: string;
+  }> {
+    const user = await this.getByIdOrThrow(userId);
+    if (user.status === UserStatus.DELETED) {
+      throw new BadRequestException({
+        code: 'ALREADY_DELETED',
+        message: 'Account is already deleted',
+      });
+    }
+
+    const snapshot = {
+      avatarPublicId: user.avatarPublicId ?? '',
+      coverPhotoPublicId: user.coverPhotoPublicId ?? '',
+    };
+
+    await this.userModel
+      .updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            status: UserStatus.DELETED,
+            displayName: 'Deleted User',
+            bio: '',
+            avatarUrl: '',
+            avatarPublicId: '',
+            coverPhotoUrl: '',
+            coverPhotoPublicId: '',
+            providers: [],
+            emailVerified: false,
+            phoneVerified: false,
+            isHost: false,
+            hostProfile: null,
+          },
+          $unset: {
+            email: '',
+            phone: '',
+            username: '',
+            googleId: '',
+            facebookId: '',
+            appleId: '',
+            passwordHash: '',
+            dateOfBirth: '',
+          },
+        },
+      )
+      .exec();
+
+    // Drop all push-token rows for this user. Keeps notifications from
+    // landing on a phone whose user just deleted their account, and frees
+    // the (token) unique index so the device can re-register cleanly
+    // under a new sign-in.
+    const fcmRes = await this.deviceTokenModel
+      .deleteMany({ userId: user._id })
+      .exec();
+
+    this.logger.log(
+      `User ${userId} soft-deleted; removed ${fcmRes.deletedCount ?? 0} FCM tokens`,
+    );
+
+    return snapshot;
   }
 
   /**

@@ -106,6 +106,30 @@ export class UsersController {
     return { user: updated };
   }
 
+  /**
+   * Permanently deletes the caller's account (soft-delete + PII anonymisation).
+   * Returns 204 — the client should clear its session immediately on success.
+   * Required by Google Play's in-app account-deletion policy.
+   */
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Delete('me')
+  async deleteMe(@CurrentUser() current: AuthenticatedUser) {
+    const snapshot = await this.users.softDeleteAccount(current.userId);
+
+    // Best-effort Cloudinary cleanup — orphaning a couple of images is
+    // strictly better than refusing the user's deletion request because
+    // the CDN call timed out. Logged on failure; periodic reaper sweeps
+    // the rest.
+    if (snapshot.avatarPublicId) {
+      this.media.deleteImage(snapshot.avatarPublicId).catch(() => undefined);
+    }
+    if (snapshot.coverPhotoPublicId) {
+      this.media
+        .deleteImage(snapshot.coverPhotoPublicId)
+        .catch(() => undefined);
+    }
+  }
+
   @HttpCode(HttpStatus.OK)
   @Post('me/cover')
   @UseInterceptors(
