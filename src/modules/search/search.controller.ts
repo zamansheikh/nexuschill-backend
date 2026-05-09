@@ -1,5 +1,9 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SearchService } from './search.service';
 
@@ -14,9 +18,10 @@ export class SearchController {
 
   @Get()
   async search(
+    @CurrentUser() current: AuthenticatedUser,
     @Query('q') q?: string,
     @Query('limit') limit?: number,
   ) {
-    return this.svc.search(q ?? '', limit ?? 20);
+    return this.svc.search(current.userId, q ?? '', limit ?? 20);
   }
 }

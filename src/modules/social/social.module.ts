@@ -8,6 +8,7 @@ import {
   ProfileVisit,
   ProfileVisitSchema,
 } from './schemas/profile-visit.schema';
+import { UserBlock, UserBlockSchema } from './schemas/user-block.schema';
 import { SocialController } from './social.controller';
 import { SocialService } from './social.service';
 
@@ -26,6 +27,11 @@ import { SocialService } from './social.service';
       { name: Follow.name, schema: FollowSchema },
       { name: ProfileVisit.name, schema: ProfileVisitSchema },
       { name: User.name, schema: UserSchema },
+      // User-blocks live alongside Follow / ProfileVisit because they
+      // are the same kind of "directed user-to-user edge" data and the
+      // same SocialService applies the filter consistently across the
+      // platform (followers, following, visitors, search, moments, chat).
+      { name: UserBlock.name, schema: UserBlockSchema },
     ]),
     // Follow / unfollow fires honor evaluations for the FOLLOWERS
     // and FOLLOWING metrics so reach-N-friends medals auto-unlock.

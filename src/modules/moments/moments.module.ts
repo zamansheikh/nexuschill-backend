@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
+import { SocialModule } from '../social/social.module';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { MomentsAdminController } from './moments-admin.controller';
 import { MomentsController } from './moments.controller';
@@ -22,6 +23,10 @@ import { Moment, MomentSchema } from './schemas/moment.schema';
       // on the feed. Full UsersModule isn't imported to avoid coupling.
       { name: User.name, schema: UserSchema },
     ]),
+    // Used to filter out posts authored by users the viewer has
+    // blocked (or who blocked the viewer). Same `hiddenUserIdsFor`
+    // helper that drives search filtering.
+    SocialModule,
   ],
   controllers: [MomentsController, MomentsAdminController],
   providers: [MomentsService],

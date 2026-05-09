@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { FilterQuery, Model } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 
 import { Room, RoomDocument, RoomStatus } from '../rooms/schemas/room.schema';
+import { SocialService } from '../social/social.service';
 import { User, UserDocument, UserStatus } from '../users/schemas/user.schema';
 
 /**
@@ -22,9 +23,10 @@ export class SearchService {
   constructor(
     @InjectModel(Room.name) private readonly roomModel: Model<RoomDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    private readonly social: SocialService,
   ) {}
 
-  async search(rawQuery: string, limit = 20) {
+  async search(callerUserId: string, rawQuery: string, limit = 20) {
     const q = rawQuery.trim();
     if (q.length === 0) {
       return { query: q, rooms: [], users: [] };
@@ -39,6 +41,17 @@ export class SearchService {
     const isNumeric = /^\d+$/.test(q);
     const numericValue = isNumeric ? parseInt(q, 10) : null;
 
+    // Resolve the caller's hidden-id set once; both filters use it.
+    // hiddenUserIdsFor returns users on EITHER side of a block edge so
+    // the experience is symmetric — neither blocker nor blocked sees
+    // the other in search results.
+    const hiddenIds = await this.social.hiddenUserIdsFor(callerUserId);
+    const hiddenOids = hiddenIds
+      .filter((id) => Types.ObjectId.isValid(id))
+      .map((id) => new Types.ObjectId(id));
+    const hiddenClause =
+      hiddenOids.length > 0 ? { $nin: hiddenOids } : undefined;
+
     // Build the room filter. Numeric queries hit `numericId` first
     // (cheap exact lookup), but we ALSO regex against the name so "1234"
     // typed into a name like "Room1234" still matches.
@@ -50,9 +63,12 @@ export class SearchService {
         { name: roomNameRegex },
         ...(numericValue != null ? [{ numericId: numericValue }] : []),
       ],
+      // Hide rooms owned by anyone in the caller's blocked-set.
+      ...(hiddenClause ? { ownerId: hiddenClause } : {}),
     };
 
-    // Users: never expose deleted / banned via search.
+    // Users: never expose deleted / banned via search, and skip the
+    // caller's blocked-set on both directions.
     const userTextRegex = new RegExp(`^${escapedQ}`, 'i');
     const userFilter: FilterQuery<UserDocument> = {
       status: { $ne: UserStatus.DELETED },
@@ -61,6 +77,7 @@ export class SearchService {
         { username: userTextRegex },
         ...(numericValue != null ? [{ numericId: numericValue }] : []),
       ],
+      ...(hiddenClause ? { _id: hiddenClause } : {}),
     };
 
     const [rooms, users] = await Promise.all([

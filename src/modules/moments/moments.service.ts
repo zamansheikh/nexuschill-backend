@@ -9,6 +9,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 
 import { MediaService } from '../media/media.service';
+import { SocialService } from '../social/social.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   CommentStatus,
@@ -44,6 +45,7 @@ export class MomentsService {
     private readonly commentModel: Model<MomentCommentDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly media: MediaService,
+    private readonly social: SocialService,
   ) {}
 
   // ============== Author-side ==============
@@ -112,6 +114,23 @@ export class MomentsService {
     const filter: FilterQuery<MomentDocument> = { status: MomentStatus.ACTIVE };
     if (params.authorId && Types.ObjectId.isValid(params.authorId)) {
       filter.authorId = new Types.ObjectId(params.authorId);
+    }
+
+    // Hide posts authored by anyone the viewer has blocked OR who has
+    // blocked the viewer. Skipped for the anonymous case (no viewerId)
+    // so feed previews on logged-out launch screens still work.
+    if (
+      viewerId &&
+      Types.ObjectId.isValid(viewerId) &&
+      !params.authorId // when filtering to a specific author the block check is at controller-call time
+    ) {
+      const hidden = await this.social.hiddenUserIdsFor(viewerId);
+      if (hidden.length > 0) {
+        const oids = hidden
+          .filter((id) => Types.ObjectId.isValid(id))
+          .map((id) => new Types.ObjectId(id));
+        filter.authorId = { $nin: oids };
+      }
     }
 
     const [items, total] = await Promise.all([

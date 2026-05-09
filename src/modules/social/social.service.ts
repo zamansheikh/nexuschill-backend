@@ -15,6 +15,7 @@ import {
   ProfileVisit,
   ProfileVisitDocument,
 } from './schemas/profile-visit.schema';
+import { UserBlock, UserBlockDocument } from './schemas/user-block.schema';
 
 export interface UserListView {
   id: string;
@@ -56,6 +57,8 @@ export class SocialService {
     @InjectModel(Follow.name) private readonly followModel: Model<FollowDocument>,
     @InjectModel(ProfileVisit.name)
     private readonly visitModel: Model<ProfileVisitDocument>,
+    @InjectModel(UserBlock.name)
+    private readonly blockModel: Model<UserBlockDocument>,
     private readonly honors: HonorsService,
   ) {}
 
@@ -310,20 +313,258 @@ export class SocialService {
       .exec();
   }
 
+  // ============== Block / Unblock ==============
+
+  /**
+   * Idempotent block. Returns `created: true` only on the first insert.
+   * Inserting under the unique compound index handles concurrent calls
+   * safely — the second one falls through as a no-op.
+   *
+   * Side-effects: severs the follow edges in BOTH directions so the
+   * blocked user disappears from the blocker's follower / following
+   * lists immediately. The follow counters are decremented in lockstep.
+   * If the user later unblocks, follows do NOT auto-restore — that's
+   * intentional, the relationship has to be re-established.
+   */
+  async blockUser(
+    blockerId: string,
+    blockedId: string,
+  ): Promise<{ created: boolean }> {
+    if (
+      !Types.ObjectId.isValid(blockerId) ||
+      !Types.ObjectId.isValid(blockedId)
+    ) {
+      throw new BadRequestException({
+        code: 'INVALID_ID',
+        message: 'Invalid id',
+      });
+    }
+    if (blockerId === blockedId) {
+      throw new BadRequestException({
+        code: 'CANNOT_BLOCK_SELF',
+        message: 'You cannot block yourself',
+      });
+    }
+    const blockerOid = new Types.ObjectId(blockerId);
+    const blockedOid = new Types.ObjectId(blockedId);
+
+    const targetExists = await this.userModel
+      .exists({ _id: blockedOid })
+      .exec();
+    if (!targetExists) {
+      throw new NotFoundException({
+        code: 'USER_NOT_FOUND',
+        message: 'User not found',
+      });
+    }
+
+    try {
+      await this.blockModel.create({
+        blockerId: blockerOid,
+        blockedId: blockedOid,
+      });
+    } catch (err: any) {
+      // Already blocked — idempotent.
+      if (err?.code === 11000) return { created: false };
+      throw err;
+    }
+
+    // Drop both follow edges so feeds and follower lists reflect the
+    // block immediately. Both deletes are independent so we run them
+    // in parallel; if either had no row to delete, the corresponding
+    // counter $inc is skipped.
+    const [forwardDel, reverseDel] = await Promise.all([
+      this.followModel
+        .deleteOne({ followerId: blockerOid, followeeId: blockedOid })
+        .exec(),
+      this.followModel
+        .deleteOne({ followerId: blockedOid, followeeId: blockerOid })
+        .exec(),
+    ]);
+    const ops: Promise<unknown>[] = [];
+    if (forwardDel.deletedCount > 0) {
+      ops.push(
+        this.userModel
+          .updateOne({ _id: blockerOid }, { $inc: { followingCount: -1 } })
+          .exec(),
+        this.userModel
+          .updateOne({ _id: blockedOid }, { $inc: { followersCount: -1 } })
+          .exec(),
+      );
+    }
+    if (reverseDel.deletedCount > 0) {
+      ops.push(
+        this.userModel
+          .updateOne({ _id: blockedOid }, { $inc: { followingCount: -1 } })
+          .exec(),
+        this.userModel
+          .updateOne({ _id: blockerOid }, { $inc: { followersCount: -1 } })
+          .exec(),
+      );
+    }
+    if (ops.length) await Promise.all(ops);
+    return { created: true };
+  }
+
+  async unblockUser(
+    blockerId: string,
+    blockedId: string,
+  ): Promise<{ removed: boolean }> {
+    if (
+      !Types.ObjectId.isValid(blockerId) ||
+      !Types.ObjectId.isValid(blockedId)
+    ) {
+      return { removed: false };
+    }
+    const res = await this.blockModel
+      .deleteOne({
+        blockerId: new Types.ObjectId(blockerId),
+        blockedId: new Types.ObjectId(blockedId),
+      })
+      .exec();
+    return { removed: res.deletedCount > 0 };
+  }
+
+  /** "Has [blockerId] blocked [blockedId]?" — single-direction. */
+  async isBlocked(blockerId: string, blockedId: string): Promise<boolean> {
+    if (
+      !Types.ObjectId.isValid(blockerId) ||
+      !Types.ObjectId.isValid(blockedId) ||
+      blockerId === blockedId
+    ) {
+      return false;
+    }
+    const exists = await this.blockModel
+      .exists({
+        blockerId: new Types.ObjectId(blockerId),
+        blockedId: new Types.ObjectId(blockedId),
+      })
+      .exec();
+    return Boolean(exists);
+  }
+
+  /** True if either user has blocked the other — used to gate DM, room
+   *  joins, profile views. */
+  async isMutuallyBlocked(userA: string, userB: string): Promise<boolean> {
+    if (
+      !Types.ObjectId.isValid(userA) ||
+      !Types.ObjectId.isValid(userB) ||
+      userA === userB
+    ) {
+      return false;
+    }
+    const a = new Types.ObjectId(userA);
+    const b = new Types.ObjectId(userB);
+    const exists = await this.blockModel
+      .exists({
+        $or: [
+          { blockerId: a, blockedId: b },
+          { blockerId: b, blockedId: a },
+        ],
+      })
+      .exec();
+    return Boolean(exists);
+  }
+
+  /**
+   * Returns the set of user IDs that should be excluded from any list
+   * shown to `userId` — both users they've blocked AND users who have
+   * blocked them. Used by feed / search / chat filters.
+   *
+   * Stringified ids so callers can drop them straight into a `Set`
+   * for O(1) membership testing without re-stringifying ObjectIds.
+   */
+  async hiddenUserIdsFor(userId: string): Promise<string[]> {
+    if (!Types.ObjectId.isValid(userId)) return [];
+    const oid = new Types.ObjectId(userId);
+    const rows = await this.blockModel
+      .find({ $or: [{ blockerId: oid }, { blockedId: oid }] })
+      .select('blockerId blockedId')
+      .lean()
+      .exec();
+    const ids = new Set<string>();
+    for (const r of rows) {
+      const a = r.blockerId?.toString();
+      const b = r.blockedId?.toString();
+      if (a && a !== userId) ids.add(a);
+      if (b && b !== userId) ids.add(b);
+    }
+    return [...ids];
+  }
+
+  /** Paged "users I have blocked" list — drives the Settings →
+   *  Blocked Users page in the mobile app. */
+  async listBlocked(
+    blockerId: string,
+    params: { page?: number; limit?: number },
+  ) {
+    if (!Types.ObjectId.isValid(blockerId)) {
+      throw new BadRequestException({
+        code: 'INVALID_ID',
+        message: 'Invalid id',
+      });
+    }
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(50, Math.max(1, params.limit ?? 20));
+    const skip = (page - 1) * limit;
+    const filter = { blockerId: new Types.ObjectId(blockerId) };
+
+    const [edges, total] = await Promise.all([
+      this.blockModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate(
+          'blockedId',
+          'username displayName avatarUrl numericId level country',
+        )
+        .exec(),
+      this.blockModel.countDocuments(filter).exec(),
+    ]);
+
+    // hydrateUsers would mark `isFollowing: true` for any preserved
+    // follow row (there shouldn't be any after block, but defensively
+    // we pass `null` as caller so isFollowing is always false on this
+    // list — it's noise for an unblock surface).
+    const items = await this.hydrateUsers(
+      edges.map((e) => (e as any).blockedId).filter((u) => u != null),
+      null,
+    );
+    return { items, page, limit, total };
+  }
+
   // ============== Helpers ==============
 
   /** Map a list of populated User docs to the public list shape and
    *  decorate each row with the caller's `isFollowing` flag in one
-   *  bulk query. */
+   *  bulk query. Filters out any user that's on either side of a
+   *  block edge with the caller — same hidden-set rule used by the
+   *  search and feed paths. */
   private async hydrateUsers(
     users: any[],
     callerUserId: string | null,
   ): Promise<UserListView[]> {
     if (users.length === 0) return [];
+
+    // Strip blocked users *first* so `isFollowing` lookups don't waste
+    // a round-trip on rows we're about to drop.
+    let visibleUsers = users;
+    if (callerUserId && Types.ObjectId.isValid(callerUserId)) {
+      const hidden = new Set(await this.hiddenUserIdsFor(callerUserId));
+      if (hidden.size > 0) {
+        visibleUsers = users.filter((u) => {
+          const id = (u._id ?? u.id)?.toString();
+          return id ? !hidden.has(id) : true;
+        });
+      }
+    }
+    if (visibleUsers.length === 0) return [];
+
     let following = new Set<string>();
     if (callerUserId && Types.ObjectId.isValid(callerUserId)) {
       const callerOid = new Types.ObjectId(callerUserId);
-      const ids = users
+      const ids = visibleUsers
         .map((u) => (u._id ?? u.id)?.toString())
         .filter((id): id is string => !!id)
         .map((id) => new Types.ObjectId(id));
@@ -334,7 +575,7 @@ export class SocialService {
         .exec();
       following = new Set(edges.map((e) => e.followeeId.toString()));
     }
-    return users.map((u) => {
+    return visibleUsers.map((u) => {
       const id = (u._id ?? u.id)?.toString() ?? '';
       return {
         id,

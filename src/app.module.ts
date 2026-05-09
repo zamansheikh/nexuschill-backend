@@ -28,6 +28,7 @@ import { MessagesModule } from './modules/messages/messages.module';
 import { MomentsModule } from './modules/moments/moments.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
+import { ReportsModule } from './modules/reports/reports.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
 import { RocketModule } from './modules/rocket/rocket.module';
 import { RoomEmojisModule } from './modules/room-emojis/room-emojis.module';
@@ -128,6 +129,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     RankingsModule,
     HonorsModule,
     SearchModule,
+    ReportsModule,
   ],
   controllers: [AppController],
   providers: [

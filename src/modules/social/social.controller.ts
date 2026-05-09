@@ -96,4 +96,33 @@ export class SocialController {
       limit,
     });
   }
+
+  // ============== Block / Unblock ==============
+
+  @Post('users/:id/block')
+  async block(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.social.blockUser(current.userId, id);
+  }
+
+  @Delete('users/:id/block')
+  async unblock(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.social.unblockUser(current.userId, id);
+  }
+
+  /** Caller's own blocked-users list. Self-only — feeds the Settings →
+   *  Blocked Users screen on mobile. */
+  @Get('users/me/blocked')
+  async myBlocked(
+    @CurrentUser() current: AuthenticatedUser,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.social.listBlocked(current.userId, { page, limit });
+  }
 }
