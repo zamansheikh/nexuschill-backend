@@ -29,6 +29,14 @@ interface CreditDebitParams {
   type: TxnType;
   description?: string;
   idempotencyKey: string;
+  /**
+   * Optional grouping key. When two related entries should appear as
+   * one logical event in the ledger (e.g. recharge base + recharge
+   * bonus, gift sender debit + receiver credit), pass the same
+   * correlationId on both. Defaults to `idempotencyKey` for singleton
+   * operations — that's the legacy behaviour and stays unchanged.
+   */
+  correlationId?: string;
   refType?: string;
   refId?: string;
   performedBy?: string;
@@ -188,7 +196,11 @@ export class WalletService {
     try {
       const txn = await this.txnModel.create({
         idempotencyKey: p.idempotencyKey,
-        correlationId: p.idempotencyKey, // singletons re-use the key
+        // When the caller groups multiple entries (e.g. RC recharge +
+        // its bonus) they pass `correlationId` explicitly. Singletons
+        // (admin mints, etc.) leave it blank and re-use the idempotency
+        // key — same legacy behaviour.
+        correlationId: p.correlationId ?? p.idempotencyKey,
         walletId: updated._id,
         userId: userObjId,
         currency,

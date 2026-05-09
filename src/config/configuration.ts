@@ -104,4 +104,24 @@ export const configuration = () => ({
      */
     serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '',
   },
+  revenuecat: {
+    /**
+     * Shared secret RevenueCat puts in the Authorization header on every
+     * webhook delivery. Set in RevenueCat dashboard → Project →
+     * Integrations → Webhooks → Authorization header.
+     *
+     * The webhook handler rejects any request whose `Authorization`
+     * header doesn't match this value byte-for-byte. Without this, the
+     * recharge endpoint is open to anyone who guesses the URL.
+     */
+    webhookAuth: process.env.REVENUECAT_WEBHOOK_AUTH || '',
+    /**
+     * Whether to accept SANDBOX-environment webhook events. Default
+     * false in production so test-store purchases don't credit real
+     * coins. Flip to true in staging to exercise the full flow.
+     */
+    acceptSandbox:
+      (process.env.REVENUECAT_ACCEPT_SANDBOX || 'false').toLowerCase() ===
+      'true',
+  },
 });

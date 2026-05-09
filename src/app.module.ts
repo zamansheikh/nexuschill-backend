@@ -30,6 +30,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
+import { RevenueCatModule } from './modules/revenuecat/revenuecat.module';
 import { RocketModule } from './modules/rocket/rocket.module';
 import { RoomEmojisModule } from './modules/room-emojis/room-emojis.module';
 import { RoomSupportModule } from './modules/room-support/room-support.module';
@@ -130,6 +131,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     HonorsModule,
     SearchModule,
     ReportsModule,
+    RevenueCatModule,
   ],
   controllers: [AppController],
   providers: [

@@ -42,6 +42,28 @@ export class RechargePackage {
   @Prop({ type: String, default: '' })
   badgeText!: string;
 
+  /**
+   * Google Play in-app product id (the one set up in Play Console
+   * Monetization → Products → In-app products). RevenueCat is the SDK
+   * we use to drive billing, but the *product* still lives in the
+   * store; RevenueCat just routes purchase events back to our webhook
+   * with this id in the payload.
+   *
+   * Sparse so legacy packages without IDs don't trigger duplicate-key
+   * errors. Indexed for the webhook hot path: every purchase webhook
+   * does a single lookup by this field to map to a RechargePackage.
+   */
+  @Prop({ type: String, default: '', sparse: true, index: true })
+  googleProductId!: string;
+
+  /**
+   * App Store Connect in-app product id (Apple equivalent of the
+   * Google one above). Same flow — RC ships the id on the webhook,
+   * we resolve it to a RechargePackage and credit the wallet.
+   */
+  @Prop({ type: String, default: '', sparse: true, index: true })
+  appleProductId!: string;
+
   @Prop({ type: Number, default: 0, index: true })
   sortOrder!: number;
 
