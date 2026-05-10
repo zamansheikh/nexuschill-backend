@@ -9,6 +9,8 @@ const SINGLETON_KEY = 'singleton';
 interface UpdateAppConfigInput {
   familiesEnabled?: boolean;
   agenciesEnabled?: boolean;
+  emailLoginEnabled?: boolean;
+  phoneLoginEnabled?: boolean;
 }
 
 /**
@@ -36,6 +38,12 @@ export class SystemConfigService {
     const set: Record<string, unknown> = {};
     if (update.familiesEnabled !== undefined) set.familiesEnabled = update.familiesEnabled;
     if (update.agenciesEnabled !== undefined) set.agenciesEnabled = update.agenciesEnabled;
+    if (update.emailLoginEnabled !== undefined) {
+      set.emailLoginEnabled = update.emailLoginEnabled;
+    }
+    if (update.phoneLoginEnabled !== undefined) {
+      set.phoneLoginEnabled = update.phoneLoginEnabled;
+    }
     return this.model
       .findOneAndUpdate(
         { key: SINGLETON_KEY },
