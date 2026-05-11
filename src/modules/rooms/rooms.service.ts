@@ -26,6 +26,10 @@ import { RealtimeEventType } from '../realtime/realtime.types';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CreateRoomDto, UpdateRoomSettingsDto } from './dto/room.dto';
 import {
+  LiveSession,
+  LiveSessionDocument,
+} from './schemas/live-session.schema';
+import {
   RoomChatMessage,
   RoomChatMessageDocument,
   RoomChatStatus,
@@ -71,6 +75,8 @@ export class RoomsService implements OnModuleInit {
     private readonly memberModel: Model<RoomMemberDocument>,
     @InjectModel(RoomChatMessage.name)
     private readonly chatModel: Model<RoomChatMessageDocument>,
+    @InjectModel(LiveSession.name)
+    private readonly liveSessionModel: Model<LiveSessionDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly numericIds: NumericIdService,
     private readonly agora: AgoraService,
@@ -882,9 +888,45 @@ export class RoomsService implements OnModuleInit {
     const room = await this.getOrThrow(roomId);
     const userOid = new Types.ObjectId(userId);
 
+    // Grab the membership row BEFORE deleting so we can attribute
+    // the time-spent to a LiveSession entry. `joinedAt` is the
+    // anchor; "now" is the close. If the row isn't there (already
+    // left, never properly joined), we just skip the session log.
+    const membership = await this.memberModel
+      .findOne({ roomId: room._id, userId: userOid })
+      .select({ joinedAt: 1 })
+      .lean()
+      .exec();
+
     const removed = await this.memberModel
       .deleteOne({ roomId: room._id, userId: userOid })
       .exec();
+
+    if (membership && membership.joinedAt && removed.deletedCount === 1) {
+      const endedAt = new Date();
+      const durationSec = Math.max(
+        0,
+        Math.floor((endedAt.getTime() - membership.joinedAt.getTime()) / 1000),
+      );
+      // Skip near-instant entries (<5s) so a tap-and-back doesn't
+      // pollute the per-user totals with noise sessions. The Live
+      // Record page only cares about meaningful time spent live.
+      if (durationSec >= 5) {
+        this.liveSessionModel
+          .create({
+            userId: userOid,
+            roomId: room._id,
+            roomKind: room.kind,
+            durationSec,
+            endedAt,
+          })
+          .catch((err) => {
+            this.logger.warn(
+              `LiveSession insert failed for user ${userId}, room ${roomId}: ${err?.message ?? err}`,
+            );
+          });
+      }
+    }
     let newViewerCount = room.viewerCount;
     if (removed.deletedCount === 1) {
       await this.roomModel
@@ -956,6 +998,172 @@ export class RoomsService implements OnModuleInit {
    * `createOrGetOwn` resets the room's settings on a fresh "go live"
    * so the next session picks new mode + slot count.
    */
+  /**
+   * Bump the caller's `lastSeenAt` on their membership row. Mobile
+   * clients ping this every ~30s while a video room is mounted, so
+   * the sweeper below can tell "the host walked away" from "the
+   * host is fine, just quiet". No-op when the user isn't a member
+   * of this room (e.g., they already left).
+   */
+  async heartbeat(roomId: string, userId: string): Promise<{ ok: boolean }> {
+    if (!Types.ObjectId.isValid(userId) || !Types.ObjectId.isValid(roomId)) {
+      return { ok: false };
+    }
+    await this.memberModel
+      .updateOne(
+        {
+          roomId: new Types.ObjectId(roomId),
+          userId: new Types.ObjectId(userId),
+        },
+        { $set: { lastSeenAt: new Date() } },
+      )
+      .exec();
+    return { ok: true };
+  }
+
+  /**
+   * Aggregate per-user live duration totals for the three windows
+   * the Live Record page surfaces. Returned shape:
+   * `{ today: { audioSec, videoSec }, week: {...}, month: {...} }`.
+   *
+   * "Today" buckets from local midnight in Asia/Dhaka (where most
+   * of our users are) — falls back to UTC midnight if the runtime
+   * doesn't have ICU. "Week" is the trailing 7 days, "month" the
+   * trailing 30 days. We don't try to match calendar-week / month
+   * boundaries — trailing windows are easier to reason about and
+   * give a smoother number that doesn't reset to zero on Mondays.
+   */
+  async liveStatsForUser(userId: string): Promise<{
+    today: { audioSec: number; videoSec: number };
+    week: { audioSec: number; videoSec: number };
+    month: { audioSec: number; videoSec: number };
+  }> {
+    if (!Types.ObjectId.isValid(userId)) {
+      return {
+        today: { audioSec: 0, videoSec: 0 },
+        week: { audioSec: 0, videoSec: 0 },
+        month: { audioSec: 0, videoSec: 0 },
+      };
+    }
+    const userOid = new Types.ObjectId(userId);
+
+    const now = new Date();
+    const startOfTodayUtc = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    );
+    const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const startOfMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const rows = await this.liveSessionModel
+      .aggregate<{ _id: RoomKind; sec: number }>([
+        {
+          $match: {
+            userId: userOid,
+            endedAt: { $gte: startOfMonth },
+          },
+        },
+        {
+          $facet: {
+            today: [
+              { $match: { endedAt: { $gte: startOfTodayUtc } } },
+              { $group: { _id: '$roomKind', sec: { $sum: '$durationSec' } } },
+            ],
+            week: [
+              { $match: { endedAt: { $gte: startOfWeek } } },
+              { $group: { _id: '$roomKind', sec: { $sum: '$durationSec' } } },
+            ],
+            month: [
+              { $group: { _id: '$roomKind', sec: { $sum: '$durationSec' } } },
+            ],
+          },
+        },
+      ])
+      .exec();
+
+    const bucket = (
+      rows: Array<{ _id: RoomKind; sec: number }> | undefined,
+    ) => {
+      const safe = rows ?? [];
+      let audioSec = 0;
+      let videoSec = 0;
+      for (const r of safe) {
+        if (r._id === RoomKind.AUDIO) audioSec += r.sec;
+        else if (r._id === RoomKind.VIDEO) videoSec += r.sec;
+      }
+      return { audioSec, videoSec };
+    };
+
+    const facet = rows[0] as unknown as
+      | {
+          today: Array<{ _id: RoomKind; sec: number }>;
+          week: Array<{ _id: RoomKind; sec: number }>;
+          month: Array<{ _id: RoomKind; sec: number }>;
+        }
+      | undefined;
+
+    return {
+      today: bucket(facet?.today),
+      week: bucket(facet?.week),
+      month: bucket(facet?.month),
+    };
+  }
+
+  /**
+   * Grace window before a video room is auto-closed because the
+   * host vanished without calling `leave`. Tuned a little longer
+   * than the client's 30s heartbeat cadence — a single dropped
+   * ping (Wi-Fi blip, phone briefly backgrounded) shouldn't kill
+   * the room, but two minutes of silence almost certainly means
+   * the host's app died or they walked away.
+   */
+  static readonly HOST_HEARTBEAT_GRACE_MS = 2 * 60 * 1000;
+
+  /**
+   * Sweep for video rooms where the host's heartbeat has gone
+   * stale and close them. Called by `RoomsCron` every 30s. Audio
+   * rooms are intentionally skipped — they're "venues" that
+   * survive a host stepping away, only video rooms are session-
+   * scoped to the host.
+   *
+   * Returns the number of rooms closed so the cron can log
+   * meaningful activity.
+   */
+  async sweepStaleHostRooms(): Promise<number> {
+    const cutoff = new Date(Date.now() - RoomsService.HOST_HEARTBEAT_GRACE_MS);
+    const liveVideoRooms = await this.roomModel
+      .find({ kind: RoomKind.VIDEO, status: RoomStatus.ACTIVE })
+      .select({ _id: 1, ownerId: 1 })
+      .lean()
+      .exec();
+    let closed = 0;
+    for (const room of liveVideoRooms) {
+      const hostMember = await this.memberModel
+        .findOne({ roomId: room._id, userId: room.ownerId })
+        .select({ lastSeenAt: 1 })
+        .lean()
+        .exec();
+      // Two close-worthy states: (a) host has no presence row at all
+      // (they never re-joined after a crash), (b) presence row but
+      // stale heartbeat past the grace window.
+      const isStale =
+        !hostMember ||
+        !hostMember.lastSeenAt ||
+        hostMember.lastSeenAt < cutoff;
+      if (!isStale) continue;
+      const full = await this.roomModel.findById(room._id).exec();
+      if (!full) continue;
+      try {
+        await this.closeVideoRoomOnHostLeave(full);
+        closed += 1;
+      } catch (err: any) {
+        this.logger.warn(
+          `Auto-close failed for video room ${room._id.toString()}: ${err?.message ?? err}`,
+        );
+      }
+    }
+    return closed;
+  }
+
   private async closeVideoRoomOnHostLeave(room: RoomDocument): Promise<void> {
     await this.roomModel
       .updateOne(

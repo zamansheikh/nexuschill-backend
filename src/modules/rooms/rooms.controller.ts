@@ -189,6 +189,36 @@ export class RoomsController {
     return this.rooms.leave(id, current.userId);
   }
 
+  /**
+   * Per-user live duration totals — drives the profile's
+   * "Live Record" page. Returns audio + video minutes for today /
+   * trailing-7-day / trailing-30-day windows. Records are written
+   * by `leave` so the numbers update the moment a user exits a
+   * room (no batch job needed).
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('me/live-stats')
+  async myLiveStats(@CurrentUser() current: AuthenticatedUser) {
+    return this.rooms.liveStatsForUser(current.userId);
+  }
+
+  /**
+   * Heartbeat ping. Mobile clients call this every ~30s while the
+   * VideoRoomPage is mounted. Server uses the freshness of these
+   * pings to decide whether the host has silently disappeared —
+   * see `RoomsCron.sweepStaleHostRooms`. Idempotent + cheap; if
+   * the caller isn't actually a member of the room it's a no-op.
+   */
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/heartbeat')
+  async heartbeat(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.rooms.heartbeat(id, current.userId);
+  }
+
   // ---------- Seats ----------
 
   @UseGuards(JwtAuthGuard)
