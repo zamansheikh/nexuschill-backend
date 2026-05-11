@@ -1269,32 +1269,84 @@ export class RoomsService implements OnModuleInit {
     return { seat: seat.toJSON() };
   }
 
-  /** Owner/admin: force-mute a seat. The user keeps the seat but stops
-   *  publishing audio (the realtime layer signals their client). */
+  /**
+   * Toggle a seat's mic-mute flag.
+   *
+   * Authorisation:
+   *   • The seat-holder can mute/unmute themselves.
+   *   • Owner/admin can force-mute or unmute any seat (host kill-switch).
+   *
+   * Previously this required owner/admin even for self-mute, which
+   * meant a guest who joined the call had no way to mute their own
+   * mic from the UI — they'd see a "host/admin only" error. Now it
+   * mirrors `setSeatVideo`: the seat-holder is always authorised
+   * for their own seat.
+   *
+   * Broadcasts `SEAT_UPDATED` on success so every client flips the
+   * mic badge over the seat tile.
+   */
   async setSeatMuted(
     roomId: string,
     actorId: string,
     seatIndex: number,
     muted: boolean,
   ) {
-    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    if (!Types.ObjectId.isValid(actorId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user',
+      });
+    }
+    const room = await this.getOrThrow(roomId);
+    const actorOid = new Types.ObjectId(actorId);
     const seat = await this.seatModel
-      .findOneAndUpdate(
-        { roomId: room._id, seatIndex },
-        { $set: { muted } },
-        { new: true },
-      )
-      .populate('userId', 'username displayName avatarUrl numericId level isHost')
+      .findOne({ roomId: room._id, seatIndex })
       .exec();
     if (!seat) {
-      throw new NotFoundException({ code: 'SEAT_NOT_FOUND', message: 'Seat not found' });
+      throw new NotFoundException({
+        code: 'SEAT_NOT_FOUND',
+        message: 'Seat not found',
+      });
     }
+    if (!seat.userId) {
+      throw new ForbiddenException({
+        code: 'SEAT_EMPTY',
+        message: 'Cannot toggle mute on an empty seat',
+      });
+    }
+
+    const isOwner = room.ownerId.equals(actorOid);
+    const isAdmin = room.adminUserIds.some((a) => a.equals(actorOid));
+    const isSelf = seat.userId.equals(actorOid);
+    if (!isOwner && !isAdmin && !isSelf) {
+      throw new ForbiddenException({
+        code: 'NOT_AUTHORIZED',
+        message: 'Only the seat holder or room admins can toggle mute',
+      });
+    }
+
+    if (seat.muted === muted) {
+      const hydrated = await this.seatModel
+        .findById(seat._id)
+        .populate(
+          'userId',
+          'username displayName avatarUrl numericId level isHost',
+        )
+        .exec();
+      return { seat: (hydrated ?? seat).toJSON() };
+    }
+    seat.muted = muted;
+    await seat.save();
+    const hydrated = await this.seatModel
+      .findById(seat._id)
+      .populate('userId', 'username displayName avatarUrl numericId level isHost')
+      .exec();
     void this.realtime.emitToRoom(
       room._id.toString(),
       RealtimeEventType.SEAT_UPDATED,
-      { seat: seat.toJSON() },
+      { seat: (hydrated ?? seat).toJSON() },
     );
-    return { seat: seat.toJSON() };
+    return { seat: (hydrated ?? seat).toJSON() };
   }
 
   /**
