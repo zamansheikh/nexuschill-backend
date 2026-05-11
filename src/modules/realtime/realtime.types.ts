@@ -27,6 +27,11 @@ export enum RealtimeEventType {
   ROOM_MEMBER_JOINED = 'room.member.joined',
   ROOM_MEMBER_LEFT = 'room.member.left',
 
+  /** Room was closed by the host (or auto-closed when the host left
+   *  a video room). Payload: `{ reason: 'host_left' | 'closed_by_host' }`.
+   *  Receivers should pop the room page + show a short toast. */
+  ROOM_CLOSED = 'room.closed',
+
   /** Chat message posted in this room. Payload is the persisted message
    *  with author hydrated. */
   ROOM_CHAT_MESSAGE = 'room.chat.message',

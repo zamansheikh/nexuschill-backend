@@ -237,10 +237,37 @@ export class RoomsService implements OnModuleInit {
           message: 'This room was removed by an admin and cannot be reopened',
         });
       }
-      // Restore from CLOSED if owner is creating again. Avoids leaving the
-      // owner without a room after a self-close.
-      if (existing.status === RoomStatus.CLOSED) {
-        existing.status = RoomStatus.ACTIVE;
+      // Active audio room: just return it. Audio rooms are persistent
+      // venues — the host doesn't pick a new layout on every "open".
+      if (
+        existing.status === RoomStatus.ACTIVE &&
+        existing.kind === RoomKind.AUDIO
+      ) {
+        return existing;
+      }
+      // Active video room: same — let the host re-enter their own
+      // active session without re-creating it. (The Live FAB always
+      // opens the create sheet, but a stray duplicate request
+      // shouldn't tear down a live broadcast.)
+      if (
+        existing.status === RoomStatus.ACTIVE &&
+        existing.kind === RoomKind.VIDEO
+      ) {
+        return existing;
+      }
+      // CLOSED room — restore to ACTIVE. For audio that's a no-op
+      // restore; for video we ALSO apply the freshly-picked layout
+      // (videoMode + micCount) so each "go live" honours the new
+      // create-sheet selection. Reseed seats so the new layout's seat
+      // count is reflected — old guest seats above the new ceiling
+      // are removed, and missing seats are appended.
+      existing.status = RoomStatus.ACTIVE;
+      if (kind === RoomKind.VIDEO) {
+        existing.videoMode = layout.videoMode;
+        existing.micCount = layout.micCount;
+        await existing.save();
+        await this.reseedSeatsForKind(existing);
+      } else {
         await existing.save();
       }
       return existing;
@@ -309,6 +336,59 @@ export class RoomsService implements OnModuleInit {
     await this.seatModel.insertMany(seatDocs);
 
     return room;
+  }
+
+  /**
+   * Rebuild the seat layout to match the room's current `micCount`.
+   * Used when a video room is "reopened" with a different mode/slot
+   * count so the old seat layout doesn't leak through. Idempotent:
+   * existing seats within [0..micCount] are reset (vacated + unmuted
+   * + video off + unlocked) rather than dropped, so any seat id that
+   * happens to be referenced elsewhere stays valid.
+   */
+  private async reseedSeatsForKind(room: RoomDocument): Promise<void> {
+    // Reset every kept seat to a clean state.
+    await this.seatModel
+      .updateMany(
+        { roomId: room._id, seatIndex: { $lte: room.micCount } },
+        {
+          $set: {
+            userId: null,
+            joinedAt: null,
+            muted: false,
+            locked: false,
+            videoEnabled: false,
+          },
+        },
+      )
+      .exec();
+    // Drop seats above the new ceiling (e.g., dropping from 9 slots to 6).
+    await this.seatModel
+      .deleteMany({ roomId: room._id, seatIndex: { $gt: room.micCount } })
+      .exec();
+    // Append any missing seats so seatIndex 0..micCount is fully covered.
+    const present = await this.seatModel
+      .find({ roomId: room._id })
+      .select('seatIndex')
+      .lean()
+      .exec();
+    const have = new Set(present.map((s) => s.seatIndex));
+    const missing: Array<Record<string, unknown>> = [];
+    for (let i = 0; i <= room.micCount; i++) {
+      if (!have.has(i)) {
+        missing.push({
+          roomId: room._id,
+          seatIndex: i,
+          locked: false,
+          muted: false,
+          videoEnabled: false,
+          userId: null,
+        });
+      }
+    }
+    if (missing.length > 0) {
+      await this.seatModel.insertMany(missing);
+    }
   }
 
   /**
@@ -848,7 +928,60 @@ export class RoomsService implements OnModuleInit {
       );
     }
 
+    // Video-room close-on-host-leave: when the room's owner leaves a
+    // video room, mark the room CLOSED, emit ROOM_CLOSED to every
+    // remaining member, and evict their presence rows. Mirrors the
+    // typical livestream behaviour — a video room is the host's
+    // session, not a persistent venue. Audio rooms are untouched
+    // (they're a "venue" that stays alive when the host steps away).
+    if (
+      room.kind === RoomKind.VIDEO &&
+      room.ownerId.equals(userOid) &&
+      room.status === RoomStatus.ACTIVE
+    ) {
+      await this.closeVideoRoomOnHostLeave(room);
+    }
+
     return { ok: true };
+  }
+
+  /**
+   * Close a video room because the host walked away. Marks the room
+   * CLOSED, evicts every remaining member's presence row, frees any
+   * seats they held, and broadcasts ROOM_CLOSED so clients can pop
+   * the room page.
+   *
+   * The room itself isn't deleted — keeping the row around preserves
+   * any gift history / chat scrollback the host might browse later.
+   * `createOrGetOwn` resets the room's settings on a fresh "go live"
+   * so the next session picks new mode + slot count.
+   */
+  private async closeVideoRoomOnHostLeave(room: RoomDocument): Promise<void> {
+    await this.roomModel
+      .updateOne(
+        { _id: room._id },
+        { $set: { status: RoomStatus.CLOSED, viewerCount: 0 } },
+      )
+      .exec();
+    // Evict any remaining members so a freshly-restarted room starts
+    // empty. Done in a single delete; no per-row events because the
+    // ROOM_CLOSED broadcast covers the same UI need.
+    await this.memberModel
+      .deleteMany({ roomId: room._id })
+      .exec();
+    // Free seats that other users were sitting on so the next session
+    // doesn't inherit ghost occupants.
+    await this.seatModel
+      .updateMany(
+        { roomId: room._id, userId: { $ne: null } },
+        { $set: { userId: null, joinedAt: null, muted: false, videoEnabled: false } },
+      )
+      .exec();
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.ROOM_CLOSED,
+      { reason: 'host_left' },
+    );
   }
 
   // ============== Member listing ==============
