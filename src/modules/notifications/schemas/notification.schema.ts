@@ -22,6 +22,9 @@ export enum NotificationKind {
   FAMILY = 'family',
   /** Activity / event / promotion banner. */
   ACTIVITY = 'activity',
+  /** Support / feedback reply (e.g. "We replied to your support
+   *  ticket"). Lives in its own topic row in the inbox. */
+  FEEDBACK = 'feedback',
 }
 
 /**

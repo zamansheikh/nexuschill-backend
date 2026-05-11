@@ -69,12 +69,23 @@ export class NotificationsService {
 
   // ============== Reads ==============
 
-  /** Newest-first list of notifications for a user. Bounded; the
-   *  inbox doesn't paginate (yet) — once we ship deep history the
-   *  client will pass a `before` cursor. */
-  async list(userId: string, limit = 100): Promise<NotificationView[]> {
+  /** Newest-first list of notifications for a user, optionally filtered
+   *  by one or more [kinds]. Bounded; the inbox doesn't paginate (yet)
+   *  — once we ship deep history the client will pass a `before`
+   *  cursor. */
+  async list(
+    userId: string,
+    options: { limit?: number; kinds?: NotificationKind[] } = {},
+  ): Promise<NotificationView[]> {
+    const limit = options.limit ?? 100;
+    const filter: Record<string, unknown> = {
+      userId: new Types.ObjectId(userId),
+    };
+    if (options.kinds && options.kinds.length > 0) {
+      filter.kind = { $in: options.kinds };
+    }
     const docs = await this.notificationModel
-      .find({ userId: new Types.ObjectId(userId) })
+      .find(filter)
       .sort({ createdAt: -1 })
       .limit(Math.min(Math.max(limit, 1), 200))
       .exec();
@@ -90,6 +101,35 @@ export class NotificationsService {
         read: false,
       })
       .exec();
+  }
+
+  /** Per-kind unread aggregation. One round-trip drives every topic
+   *  row's badge on the inbox page (`Activity`, `Family`, `System`,
+   *  etc.), so the client doesn't have to fan out N count queries. */
+  async unreadCountByKind(
+    userId: string,
+  ): Promise<Record<NotificationKind, number>> {
+    const rows = await this.notificationModel
+      .aggregate<{ _id: NotificationKind; count: number }>([
+        {
+          $match: {
+            userId: new Types.ObjectId(userId),
+            read: false,
+          },
+        },
+        { $group: { _id: '$kind', count: { $sum: 1 } } },
+      ])
+      .exec();
+    const out = Object.values(NotificationKind).reduce<
+      Record<string, number>
+    >((acc, k) => {
+      acc[k] = 0;
+      return acc;
+    }, {}) as Record<NotificationKind, number>;
+    for (const row of rows) {
+      out[row._id] = row.count;
+    }
+    return out;
   }
 
   // ============== Writes ==============
