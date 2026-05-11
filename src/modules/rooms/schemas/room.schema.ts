@@ -3,10 +3,26 @@ import { HydratedDocument, Types } from 'mongoose';
 
 export type RoomDocument = HydratedDocument<Room>;
 
-/** Distinguishes future video rooms from today's audio-only rooms. */
+/** Audio rooms have a single seat layout (1 owner + N audio guests).
+ *  Video rooms come in two flavours — see [RoomVideoMode]. */
 export enum RoomKind {
   AUDIO = 'audio',
   VIDEO = 'video',
+}
+
+/**
+ * Video room layout selector. Ignored when [Room.kind] is `audio`.
+ *
+ *  • `hostBroadcast` — owner publishes video, guests join as audio-only
+ *    callers (up to 3 caller seats, so 4 people are "on stage" total).
+ *    Mirrors the typical livestream-with-co-host-callins shape.
+ *  • `multiSeat` — every occupied seat publishes video. Owner picks
+ *    the slot count at room-create time (4, 6, or 9 total). Mirrors
+ *    the multi-tile party room shape.
+ */
+export enum RoomVideoMode {
+  HOST_BROADCAST = 'hostBroadcast',
+  MULTI_SEAT = 'multiSeat',
 }
 
 export enum RoomStatus {
@@ -122,6 +138,15 @@ export class Room {
   @Prop({ type: String, enum: RoomKind, default: RoomKind.AUDIO, index: true })
   kind!: RoomKind;
 
+  /**
+   * Layout selector for video rooms (see [RoomVideoMode]). Null for
+   * audio rooms — the field is just an artifact of the discriminator
+   * and the validation logic in [RoomsService] enforces that audio
+   * rooms never carry a video mode.
+   */
+  @Prop({ type: String, enum: RoomVideoMode, default: null })
+  videoMode?: RoomVideoMode | null;
+
   /** 7-digit public ID — what users type to find a room. */
   @Prop({ type: Number, unique: true, sparse: true, index: true })
   numericId?: number;
@@ -169,8 +194,17 @@ export class Room {
   @Prop({ type: Boolean, default: false })
   hasPassword!: boolean;
 
-  /** Number of guest seats (excluding owner seat at index 0). 8–15. */
-  @Prop({ type: Number, default: 8, min: 4, max: 15 })
+  /**
+   * Number of guest seats (excluding owner seat at index 0).
+   *   • audio: 4–15
+   *   • video / hostBroadcast: fixed at 3 (3 audio callers + 1 video host)
+   *   • video / multiSeat: 3 / 5 / 8 (4, 6, or 9 total seats including owner)
+   *
+   * Schema floor is relaxed to 3 to fit both video shapes; the per-kind
+   * legal values are enforced by [RoomsService] on create + settings
+   * update so accidental writes can't escape the validation.
+   */
+  @Prop({ type: Number, default: 8, min: 3, max: 15 })
   micCount!: number;
 
   @Prop({ type: RoomPoliciesSchema, default: () => ({}) })

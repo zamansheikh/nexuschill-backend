@@ -29,6 +29,7 @@ import {
   EnterRoomDto,
   KickFromRoomDto,
   SendChatDto,
+  SetSeatVideoDto,
   UpdateRoomSettingsDto,
 } from './dto/room.dto';
 import { GiftsService } from '../gifts/gifts.service';
@@ -85,8 +86,9 @@ export class RoomsController {
     @Query('limit') limit?: number,
     @Query('sort') sort?: 'popular' | 'recent',
     @Query('country') country?: string,
+    @Query('kind') kind?: RoomKind,
   ) {
-    return this.rooms.listLive({ page, limit, sort, country });
+    return this.rooms.listLive({ page, limit, sort, country, kind });
   }
 
   /** Public snapshot — used to render the room intro card from a deeplink. */
@@ -253,6 +255,24 @@ export class RoomsController {
     @Param('seatIndex', ParseIntPipe) seatIndex: number,
   ) {
     return this.rooms.setSeatMuted(id, current.userId, seatIndex, false);
+  }
+
+  /**
+   * Toggle a seat's video publish state. See [RoomsService.setSeatVideo]
+   * for the per-mode rules — only valid on `video` rooms; rejected on
+   * audio. The seat holder can toggle their own; owner/admin can
+   * toggle any.
+   */
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/seats/:seatIndex/video')
+  async setSeatVideo(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+    @Body() body: SetSeatVideoDto,
+  ) {
+    return this.rooms.setSeatVideo(id, current.userId, seatIndex, body.on);
   }
 
   /** Remove a member from a seat without kicking them from the room. */

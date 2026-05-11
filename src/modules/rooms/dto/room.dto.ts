@@ -14,7 +14,12 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
-import { ChatPolicy, MicPolicy, RoomKind } from '../schemas/room.schema';
+import {
+  ChatPolicy,
+  MicPolicy,
+  RoomKind,
+  RoomVideoMode,
+} from '../schemas/room.schema';
 
 export class CreateRoomDto {
   /// Optional. When omitted, the service falls back to the user's
@@ -34,12 +39,33 @@ export class CreateRoomDto {
   @IsEnum(RoomKind)
   kind?: RoomKind;
 
-  /** Number of guest seats; owner seat is always present at index 0. */
+  /** Required when `kind === video`. Ignored for audio rooms. */
+  @IsOptional()
+  @IsEnum(RoomVideoMode)
+  videoMode?: RoomVideoMode;
+
+  /**
+   * Number of guest seats. Owner seat is always present at index 0.
+   *   • audio: 4–15
+   *   • video / hostBroadcast: fixed at 3 (the service overrides any
+   *     value the client sends; included here so the create form can
+   *     send a single shape regardless of kind)
+   *   • video / multiSeat: 3 / 5 / 8 (4, 6, or 9 total seats)
+   *
+   * Per-kind legal values are enforced by [RoomsService] — the
+   * decorator floor is relaxed to 3 to fit both video shapes.
+   */
   @IsOptional()
   @IsInt()
-  @Min(4)
+  @Min(3)
   @Max(15)
   micCount?: number;
+}
+
+export class SetSeatVideoDto {
+  /** True to start publishing video on this seat, false to stop. */
+  @IsBoolean()
+  on!: boolean;
 }
 
 export class UpdateRoomPoliciesDto {
@@ -70,7 +96,7 @@ export class UpdateRoomSettingsDto {
 
   @IsOptional()
   @IsInt()
-  @Min(4)
+  @Min(3)
   @Max(15)
   micCount?: number;
 

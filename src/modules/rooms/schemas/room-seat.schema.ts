@@ -49,6 +49,19 @@ export class RoomSeat {
   @Prop({ type: Boolean, default: false })
   muted!: boolean;
 
+  /**
+   * True when this seat is currently publishing video.
+   *
+   *   • audio rooms — always false (the field exists so the seat shape
+   *     stays uniform across kinds).
+   *   • video / hostBroadcast — only seat 0 (owner) ever flips true;
+   *     guest seats stay false (audio-only callers).
+   *   • video / multiSeat — defaults to true when a user takes the
+   *     seat; can be toggled via `POST /rooms/:id/seats/:i/video`.
+   */
+  @Prop({ type: Boolean, default: false })
+  videoEnabled!: boolean;
+
   @Prop({ type: Date, default: null })
   joinedAt?: Date | null;
 }

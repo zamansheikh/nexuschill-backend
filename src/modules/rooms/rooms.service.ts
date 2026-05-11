@@ -43,6 +43,7 @@ import {
   Room,
   RoomDocument,
   RoomKind,
+  RoomVideoMode,
   RoomStatus,
 } from './schemas/room.schema';
 
@@ -200,9 +201,17 @@ export class RoomsService implements OnModuleInit {
   // ============== Lifecycle ==============
 
   /**
-   * First-time room creation. One audio room per user — calling twice
-   * returns the existing room rather than 409, so the client can call
-   * this on every "open Mine tab" without thinking.
+   * First-time room creation. One audio room + one video room per
+   * user — calling twice for the same kind returns the existing room
+   * rather than 409, so the client can call this on every "open Mine
+   * tab" without thinking.
+   *
+   * The seat shape is resolved per (kind, videoMode):
+   *   • audio: micCount in [4, 15], default 8.
+   *   • video / hostBroadcast: micCount forced to 3 (3 audio caller
+   *     seats; owner publishes video on seat 0).
+   *   • video / multiSeat: micCount in {3, 5, 8} → 4 / 6 / 9 total
+   *     seats including the owner. Default 5 (6-slot room).
    */
   async createOrGetOwn(
     ownerId: string,
@@ -213,6 +222,10 @@ export class RoomsService implements OnModuleInit {
     }
     const kind = input.kind ?? RoomKind.AUDIO;
     const ownerOid = new Types.ObjectId(ownerId);
+
+    // Resolve videoMode + micCount per kind. Throws on illegal combos
+    // so the bad-config doesn't reach disk.
+    const layout = this.resolveRoomLayout(kind, input.videoMode, input.micCount);
 
     const existing = await this.roomModel
       .findOne({ ownerId: ownerOid, kind })
@@ -243,7 +256,6 @@ export class RoomsService implements OnModuleInit {
       owner.displayName?.trim() ||
       owner.username?.trim() ||
       'My Room';
-    const micCount = input.micCount ?? 8;
     // Seed the room cover with the owner's avatar so newly-created
     // rooms have a sensible identity image immediately. Owner can
     // override later via the settings sheet's "Change Picture" row.
@@ -258,31 +270,96 @@ export class RoomsService implements OnModuleInit {
         ownerId: ownerOid,
         ownerCountry,
         kind,
+        videoMode: layout.videoMode,
         numericId,
         name,
         announcement: input.announcement?.trim() ?? '',
         coverUrl,
-        micCount,
+        micCount: layout.micCount,
         status: RoomStatus.ACTIVE,
       }),
     );
 
     // Seed seats: index 0 = owner, 1..micCount = guest seats.
+    //
+    // `videoEnabled` defaults to false everywhere. Multi-seat video
+    // rooms flip it true when a user takes the seat (see takeSeat);
+    // host-broadcast video rooms flip it true on seat 0 alone, when
+    // the owner takes their own seat.
     const seatDocs = [
-      { roomId: room._id, seatIndex: 0, locked: false, muted: false, userId: null },
+      {
+        roomId: room._id,
+        seatIndex: 0,
+        locked: false,
+        muted: false,
+        videoEnabled: false,
+        userId: null,
+      },
     ];
-    for (let i = 1; i <= micCount; i++) {
+    for (let i = 1; i <= layout.micCount; i++) {
       seatDocs.push({
         roomId: room._id,
         seatIndex: i,
         locked: false,
         muted: false,
+        videoEnabled: false,
         userId: null,
       });
     }
     await this.seatModel.insertMany(seatDocs);
 
     return room;
+  }
+
+  /**
+   * Resolve + validate the seat shape for a room being created or
+   * updated. Throws [BadRequestException] on illegal (kind, videoMode,
+   * micCount) combinations.
+   */
+  private resolveRoomLayout(
+    kind: RoomKind,
+    videoMode: RoomVideoMode | undefined,
+    requestedMic: number | undefined,
+  ): { videoMode: RoomVideoMode | null; micCount: number } {
+    if (kind === RoomKind.AUDIO) {
+      if (videoMode != null) {
+        throw new BadRequestException({
+          code: 'AUDIO_ROOM_NO_VIDEO_MODE',
+          message: 'Audio rooms cannot carry a videoMode',
+        });
+      }
+      const mic = requestedMic ?? 8;
+      if (mic < 4 || mic > 15) {
+        throw new BadRequestException({
+          code: 'INVALID_MIC_COUNT',
+          message: 'micCount for audio rooms must be 4–15',
+        });
+      }
+      return { videoMode: null, micCount: mic };
+    }
+    // kind === VIDEO
+    if (videoMode == null) {
+      throw new BadRequestException({
+        code: 'VIDEO_MODE_REQUIRED',
+        message: 'videoMode is required when kind=video',
+      });
+    }
+    if (videoMode === RoomVideoMode.HOST_BROADCAST) {
+      // Host-broadcast is always 1 video host + 3 audio callers.
+      // The caller's micCount is ignored if present — we override to
+      // the only legal value so a stale client can't lock itself out.
+      return { videoMode, micCount: 3 };
+    }
+    // MULTI_SEAT — owner picks 4 / 6 / 9 total seats = micCount of 3 / 5 / 8.
+    const mic = requestedMic ?? 5; // default 6-slot
+    if (mic !== 3 && mic !== 5 && mic !== 8) {
+      throw new BadRequestException({
+        code: 'INVALID_MIC_COUNT',
+        message:
+          'micCount for multi-seat video rooms must be 3, 5, or 8 (4 / 6 / 9 total seats)',
+      });
+    }
+    return { videoMode, micCount: mic };
   }
 
   /** GET /rooms/me — the caller's own room (audio for now). */
@@ -370,6 +447,13 @@ export class RoomsService implements OnModuleInit {
      *  Empty / undefined means "no country filter". Codes are uppercased
      *  to match the indexed `ownerCountry` field. */
     country?: string;
+    /**
+     * Optional kind discriminator. Audio + video rooms share the same
+     * Room collection, so the Party tab queries `audio` and the Live
+     * tab queries `video`. Empty/undefined returns both kinds, which
+     * is what the admin grid wants.
+     */
+    kind?: RoomKind;
   }) {
     const page = Math.max(1, params.page ?? 1);
     const limit = Math.min(50, Math.max(1, params.limit ?? 20));
@@ -383,6 +467,9 @@ export class RoomsService implements OnModuleInit {
       status: RoomStatus.ACTIVE,
       viewerCount: { $gt: 0 },
     };
+    if (params.kind) {
+      filter.kind = params.kind;
+    }
 
     const countries = (params.country ?? '')
       .split(',')
@@ -737,7 +824,7 @@ export class RoomsService implements OnModuleInit {
       await this.seatModel
         .updateMany(
           { roomId: room._id, userId: userOid },
-          { $set: { userId: null, joinedAt: null, muted: false } },
+          { $set: { userId: null, joinedAt: null, muted: false, videoEnabled: false } },
         )
         .exec();
       // Emit a SEAT_UPDATED for each freed seat so the grid empties live.
@@ -869,6 +956,17 @@ export class RoomsService implements OnModuleInit {
       });
     }
 
+    // Default-video-on rules per (kind, videoMode):
+    //   • audio room — always false.
+    //   • video / hostBroadcast — only the owner seat (index 0)
+    //     publishes video; guest seats stay audio-only.
+    //   • video / multiSeat — every occupied seat publishes video by
+    //     default; the seat-holder can toggle it off via setSeatVideo.
+    const defaultVideoOn =
+      room.kind === RoomKind.VIDEO &&
+      (room.videoMode === RoomVideoMode.MULTI_SEAT ||
+        (room.videoMode === RoomVideoMode.HOST_BROADCAST && seatIndex === 0));
+
     // Atomic claim: only flip if the seat is empty + unlocked. Conditional
     // update prevents two users grabbing the same seat in a race.
     const claim = await this.seatModel
@@ -880,7 +978,12 @@ export class RoomsService implements OnModuleInit {
           locked: false,
         },
         {
-          $set: { userId: userOid, joinedAt: new Date(), muted: false },
+          $set: {
+            userId: userOid,
+            joinedAt: new Date(),
+            muted: false,
+            videoEnabled: defaultVideoOn,
+          },
         },
         { new: true },
       )
@@ -917,7 +1020,14 @@ export class RoomsService implements OnModuleInit {
             userId: userOid,
             seatIndex: { $ne: seatIndex },
           },
-          { $set: { userId: null, joinedAt: null, muted: false } },
+          {
+            $set: {
+              userId: null,
+              joinedAt: null,
+              muted: false,
+              videoEnabled: false,
+            },
+          },
         )
         .exec();
       for (const g of ghosts) {
@@ -968,7 +1078,7 @@ export class RoomsService implements OnModuleInit {
     const res = await this.seatModel
       .findOneAndUpdate(
         { roomId: room._id, seatIndex, userId: userOid },
-        { $set: { userId: null, joinedAt: null, muted: false } },
+        { $set: { userId: null, joinedAt: null, muted: false, videoEnabled: false } },
         { new: true },
       )
       .exec();
@@ -1054,6 +1164,95 @@ export class RoomsService implements OnModuleInit {
     return { seat: seat.toJSON() };
   }
 
+  /**
+   * Toggle a seat's video publish state.
+   *
+   * Authorisation:
+   *   • The seat-holder can toggle their own video.
+   *   • Owner/admin can toggle any seat (host kill-switch).
+   *
+   * Per-mode rules:
+   *   • audio room — rejected; video doesn't exist for the kind.
+   *   • video / hostBroadcast — only the owner seat (index 0) can
+   *     publish video. Guest seats can never enable it.
+   *   • video / multiSeat — any occupied seat can toggle.
+   *
+   * Broadcasts `SEAT_UPDATED` on success so every client flips the
+   * video tile + (un)subscribes from the seat-holder's uid.
+   */
+  async setSeatVideo(
+    roomId: string,
+    actorId: string,
+    seatIndex: number,
+    on: boolean,
+  ) {
+    if (!Types.ObjectId.isValid(actorId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user',
+      });
+    }
+    const room = await this.getOrThrow(roomId);
+    if (room.kind !== RoomKind.VIDEO) {
+      throw new BadRequestException({
+        code: 'NOT_A_VIDEO_ROOM',
+        message: 'Video controls are only available on video rooms',
+      });
+    }
+    if (
+      room.videoMode === RoomVideoMode.HOST_BROADCAST &&
+      seatIndex !== 0
+    ) {
+      throw new ForbiddenException({
+        code: 'HOST_BROADCAST_GUESTS_AUDIO_ONLY',
+        message: 'Guest seats are audio-only in this room',
+      });
+    }
+
+    const actorOid = new Types.ObjectId(actorId);
+    const seat = await this.seatModel
+      .findOne({ roomId: room._id, seatIndex })
+      .exec();
+    if (!seat) {
+      throw new NotFoundException({
+        code: 'SEAT_NOT_FOUND',
+        message: 'Seat not found',
+      });
+    }
+    if (!seat.userId) {
+      throw new ForbiddenException({
+        code: 'SEAT_EMPTY',
+        message: 'Cannot toggle video on an empty seat',
+      });
+    }
+
+    const isOwner = room.ownerId.equals(actorOid);
+    const isAdmin = room.adminUserIds.some((a) => a.equals(actorOid));
+    const isSelf = seat.userId.equals(actorOid);
+    if (!isOwner && !isAdmin && !isSelf) {
+      throw new ForbiddenException({
+        code: 'NOT_AUTHORIZED',
+        message: 'Only the seat holder or room admins can toggle video',
+      });
+    }
+
+    if (seat.videoEnabled === on) {
+      return { seat: seat.toJSON() };
+    }
+    seat.videoEnabled = on;
+    await seat.save();
+    const hydrated = await this.seatModel
+      .findById(seat._id)
+      .populate('userId', 'username displayName avatarUrl numericId level isHost')
+      .exec();
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.SEAT_UPDATED,
+      { seat: (hydrated ?? seat).toJSON() },
+    );
+    return { seat: (hydrated ?? seat).toJSON() };
+  }
+
   /** Owner/admin removes a user from a seat without kicking them from the room. */
   async kickFromSeat(roomId: string, actorId: string, seatIndex: number) {
     const room = await this.assertOwnerOrAdmin(roomId, actorId);
@@ -1071,7 +1270,7 @@ export class RoomsService implements OnModuleInit {
     const seat = await this.seatModel
       .findOneAndUpdate(
         { roomId: room._id, seatIndex, userId: { $ne: null } },
-        { $set: { userId: null, joinedAt: null, muted: false } },
+        { $set: { userId: null, joinedAt: null, muted: false, videoEnabled: false } },
         { new: true },
       )
       .exec();
@@ -1311,7 +1510,7 @@ export class RoomsService implements OnModuleInit {
       this.seatModel
         .updateMany(
           { roomId: room._id, userId: targetOid },
-          { $set: { userId: null, joinedAt: null, muted: false } },
+          { $set: { userId: null, joinedAt: null, muted: false, videoEnabled: false } },
         )
         .exec(),
       this.roomModel
@@ -1624,7 +1823,7 @@ export class RoomsService implements OnModuleInit {
       this.seatModel
         .updateMany(
           { roomId: room._id, userId: { $ne: null } },
-          { $set: { userId: null, joinedAt: null, muted: false } },
+          { $set: { userId: null, joinedAt: null, muted: false, videoEnabled: false } },
         )
         .exec(),
       this.roomModel
