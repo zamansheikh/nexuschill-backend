@@ -22,6 +22,7 @@ import {
   UpdateAgencyStatusDto,
 } from './dto/agency.dto';
 import { AgencyCreateRequestStatus } from './schemas/agency-create-request.schema';
+import { AgencyJoinRequestStatus } from './schemas/agency-join-request.schema';
 import { AgencyMemberRole } from './schemas/agency-member.schema';
 import { AgencyStatus } from './schemas/agency.schema';
 
@@ -172,6 +173,60 @@ export class AgenciesController {
     @CurrentAdmin() admin: AuthenticatedAdmin,
   ) {
     return this.agencies.removeMember(id, userId, admin);
+  }
+
+  // ----- Join requests (review queue for THIS agency) -----
+
+  @RequirePermissions(PERMISSIONS.AGENCY_VIEW)
+  @Get(':id/join-requests')
+  async listJoinRequests(
+    @Param('id') id: string,
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('status') status?: AgencyJoinRequestStatus,
+  ) {
+    return this.agencies.listJoinRequests(
+      id,
+      { page, limit, status },
+      admin,
+    );
+  }
+
+  @RequirePermissions(PERMISSIONS.AGENCY_MANAGE)
+  @Post(':id/join-requests/:reqId/approve')
+  async approveJoinRequest(
+    @Param('id') id: string,
+    @Param('reqId') reqId: string,
+    @Body() body: { note?: string },
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ) {
+    const { request } = await this.agencies.approveJoinRequest(
+      id,
+      reqId,
+      admin.adminId,
+      body.note ?? '',
+      admin,
+    );
+    return { request };
+  }
+
+  @RequirePermissions(PERMISSIONS.AGENCY_MANAGE)
+  @Post(':id/join-requests/:reqId/reject')
+  async rejectJoinRequest(
+    @Param('id') id: string,
+    @Param('reqId') reqId: string,
+    @Body() body: { note?: string },
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ) {
+    const { request } = await this.agencies.rejectJoinRequest(
+      id,
+      reqId,
+      admin.adminId,
+      body.note ?? '',
+      admin,
+    );
+    return { request };
   }
 
   /**

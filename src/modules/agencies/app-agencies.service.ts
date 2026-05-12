@@ -133,10 +133,19 @@ export class AppAgenciesService {
       agency = await this.agencyModel.findById(member.agencyId).exec();
     }
 
-    const pendingRequest = await this.requestModel
+    // Populate the agency so the mobile "Request pending" card can
+    // show which agency the user is waiting on without an extra
+    // round-trip. `.lean()` skips the schema-level `_id → id`
+    // transform, so normalize both the request doc and the nested
+    // agency by hand below.
+    const pendingRequestRaw = await this.requestModel
       .findOne({ userId: userOid, status: AgencyJoinRequestStatus.PENDING })
+      .populate('agencyId', 'name code numericId country logoUrl hostCount')
       .lean()
       .exec();
+    const pendingRequest = pendingRequestRaw
+      ? _normalizePopulatedJoinRequest(pendingRequestRaw)
+      : null;
 
     // Surface a pending agency-creation request too — the My Agency
     // empty state shows it as a "your request is under review" card.
@@ -227,8 +236,29 @@ export class AppAgenciesService {
       });
     }
 
-    // Reuse / upsert via partial-unique index — duplicate pending
-    // requests would 11000.
+    // One pending join request per user, period — across all
+    // agencies. The user has to cancel their current pending request
+    // before applying to a different agency. Mirrors the product
+    // rule that the My Agency page shows a single "Request pending"
+    // card with no concept of multiple parallel applications.
+    const anyPending = await this.requestModel
+      .findOne({ userId: userOid, status: AgencyJoinRequestStatus.PENDING })
+      .lean()
+      .exec();
+    if (anyPending) {
+      if (anyPending.agencyId.equals(agencyOid)) {
+        throw new ConflictException({
+          code: 'REQUEST_PENDING',
+          message: 'You already have a pending request to this agency',
+        });
+      }
+      throw new ConflictException({
+        code: 'REQUEST_PENDING_OTHER_AGENCY',
+        message:
+          'You already have a pending request to another agency. Cancel it before applying somewhere else.',
+      });
+    }
+
     try {
       return await this.requestModel.create({
         agencyId: agencyOid,
@@ -238,9 +268,11 @@ export class AppAgenciesService {
       });
     } catch (err: any) {
       if (err?.code === 11000) {
+        // Race: a second submission won the unique-index check
+        // because the pre-check above didn't see the in-flight write.
         throw new ConflictException({
           code: 'REQUEST_PENDING',
-          message: 'You already have a pending request to this agency',
+          message: 'You already have a pending request',
         });
       }
       throw err;
@@ -1412,6 +1444,36 @@ export class AppAgenciesService {
     await req.save();
     return req;
   }
+}
+
+/**
+ * Normalize a `.lean()` + populated join-request row so the populated
+ * `agencyId` becomes an `agency` sibling (with `id` instead of `_id`)
+ * and the original `agencyId` field stays as a string the mobile can
+ * still parse. Without this, the mobile JSON parser hits the raw
+ * `{ _id: ObjectId }` shape and trips its `String?` cast.
+ */
+function _normalizePopulatedJoinRequest(raw: any): Record<string, any> {
+  const populated = raw.agencyId;
+  if (populated && typeof populated === 'object') {
+    return {
+      ...raw,
+      id: raw._id?.toString(),
+      _id: raw._id?.toString(),
+      agencyId: populated._id?.toString() ?? '',
+      agency: {
+        ...populated,
+        id: populated._id?.toString(),
+        _id: populated._id?.toString(),
+      },
+    };
+  }
+  return {
+    ...raw,
+    id: raw._id?.toString(),
+    _id: raw._id?.toString(),
+    agencyId: populated?.toString() ?? '',
+  };
 }
 
 function _emptyMine() {

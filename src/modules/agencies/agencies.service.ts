@@ -19,6 +19,11 @@ import {
   AgencyCreateRequestStatus,
 } from './schemas/agency-create-request.schema';
 import {
+  AgencyJoinRequest,
+  AgencyJoinRequestDocument,
+  AgencyJoinRequestStatus,
+} from './schemas/agency-join-request.schema';
+import {
   AgencyMember,
   AgencyMemberDocument,
   AgencyMemberRole,
@@ -53,6 +58,8 @@ export class AgenciesService {
     private readonly memberModel: Model<AgencyMemberDocument>,
     @InjectModel(AgencyCreateRequest.name)
     private readonly createRequestModel: Model<AgencyCreateRequestDocument>,
+    @InjectModel(AgencyJoinRequest.name)
+    private readonly joinRequestModel: Model<AgencyJoinRequestDocument>,
     private readonly users: UsersService,
     private readonly numericIds: NumericIdService,
     private readonly config: SystemConfigService,
@@ -725,5 +732,166 @@ export class AgenciesService {
     req.decisionNote = note.trim();
     await req.save();
     return req;
+  }
+
+  // ---------------- Agency JOIN requests (admin review queue) ----------------
+  //
+  // App users submit join requests from the My Agency page. The
+  // agency's own owner / admin can approve them from the mobile
+  // moderator view, but platform admins also need visibility from
+  // the web admin panel — that's what these endpoints serve.
+
+  /**
+   * Paginated list of join requests for a single agency. Hydrates
+   * the applicant user so the table can render avatar + name +
+   * numericId in one round-trip.
+   */
+  async listJoinRequests(
+    agencyId: string,
+    params: {
+      page?: number;
+      limit?: number;
+      status?: AgencyJoinRequestStatus;
+    },
+    admin: AuthenticatedAdmin,
+  ) {
+    const agency = await this.findOneOr404(agencyId, admin);
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(100, Math.max(1, params.limit ?? 20));
+    const skip = (page - 1) * limit;
+    const filter: FilterQuery<AgencyJoinRequestDocument> = {
+      agencyId: agency._id,
+    };
+    if (params.status) filter.status = params.status;
+    const [rawItems, total] = await Promise.all([
+      this.joinRequestModel
+        .find(filter)
+        .sort({ status: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate(
+          'userId',
+          'username displayName avatarUrl numericId level isHost',
+        )
+        .lean()
+        .exec(),
+      this.joinRequestModel.countDocuments(filter).exec(),
+    ]);
+    // Normalize the populated user `_id → id` for the admin-panel
+    // table — mirrors the same fix `listMembers` / `listCreateRequests`
+    // already apply.
+    const items = rawItems.map((r: any) => {
+      const rawUser = r.userId;
+      const userObj =
+        rawUser && typeof rawUser === 'object'
+          ? {
+              ...rawUser,
+              id: rawUser._id?.toString(),
+              _id: rawUser._id?.toString(),
+            }
+          : rawUser?.toString();
+      return {
+        ...r,
+        id: r._id?.toString(),
+        _id: r._id?.toString(),
+        agencyId: r.agencyId?.toString(),
+        userId: userObj,
+        decidedBy: r.decidedBy?.toString(),
+      };
+    });
+    return { items, page, limit, total };
+  }
+
+  /**
+   * Approve a join request: creates the AgencyMember row with role
+   * MEMBER, increments host count, auto-promotes the user to host
+   * (matches the rule applied on the app-side approval path), and
+   * stamps the audit fields on the request itself.
+   *
+   * Throws if the applicant has joined another agency in the meantime.
+   */
+  async approveJoinRequest(
+    agencyId: string,
+    requestId: string,
+    actorAdminId: string,
+    note: string,
+    admin: AuthenticatedAdmin,
+  ): Promise<{ request: AgencyJoinRequestDocument }> {
+    await this.assertFeatureEnabled();
+    const agency = await this.findOneOr404(agencyId, admin);
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new NotFoundException('Request not found');
+    }
+    const req = await this.joinRequestModel.findById(requestId).exec();
+    if (!req || !req.agencyId.equals(agency._id)) {
+      throw new NotFoundException('Request not found');
+    }
+    if (req.status !== AgencyJoinRequestStatus.PENDING) {
+      throw new BadRequestException({
+        code: 'REQUEST_NOT_PENDING',
+        message: 'Request is already decided',
+      });
+    }
+    const conflictingMember = await this.memberModel
+      .findOne({ userId: req.userId })
+      .lean()
+      .exec();
+    if (conflictingMember) {
+      throw new ConflictException({
+        code: 'APPLICANT_ALREADY_IN_AGENCY',
+        message: 'Applicant is already a member of an agency',
+      });
+    }
+    await this.memberModel.create({
+      agencyId: agency._id,
+      userId: req.userId,
+      role: AgencyMemberRole.MEMBER,
+      joinedAt: new Date(),
+    });
+    await this.agencyModel
+      .updateOne({ _id: agency._id }, { $inc: { hostCount: 1 } })
+      .exec();
+    await this.users.ensureHostForAgency(
+      req.userId.toString(),
+      agency._id.toString(),
+      actorAdminId,
+    );
+    req.status = AgencyJoinRequestStatus.APPROVED;
+    // decidedBy expects a User-ref (app moderator); leave null when an
+    // admin approves so we don't fake a User _id from an Admin _id.
+    req.decidedBy = null;
+    req.decidedAt = new Date();
+    req.decisionNote = note.trim();
+    await req.save();
+    return { request: req };
+  }
+
+  async rejectJoinRequest(
+    agencyId: string,
+    requestId: string,
+    _actorAdminId: string,
+    note: string,
+    admin: AuthenticatedAdmin,
+  ): Promise<{ request: AgencyJoinRequestDocument }> {
+    const agency = await this.findOneOr404(agencyId, admin);
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new NotFoundException('Request not found');
+    }
+    const req = await this.joinRequestModel.findById(requestId).exec();
+    if (!req || !req.agencyId.equals(agency._id)) {
+      throw new NotFoundException('Request not found');
+    }
+    if (req.status !== AgencyJoinRequestStatus.PENDING) {
+      throw new BadRequestException({
+        code: 'REQUEST_NOT_PENDING',
+        message: 'Request is already decided',
+      });
+    }
+    req.status = AgencyJoinRequestStatus.REJECTED;
+    req.decidedBy = null;
+    req.decidedAt = new Date();
+    req.decisionNote = note.trim();
+    await req.save();
+    return { request: req };
   }
 }
