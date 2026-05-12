@@ -13,6 +13,11 @@ import { CounterScope } from '../common/schemas/counter.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { UsersService } from '../users/users.service';
 import {
+  AgencyCreateRequest,
+  AgencyCreateRequestDocument,
+  AgencyCreateRequestStatus,
+} from './schemas/agency-create-request.schema';
+import {
   Agency,
   AgencyDocument,
   AgencyStatus,
@@ -52,6 +57,8 @@ export class AppAgenciesService {
     private readonly memberModel: Model<AgencyMemberDocument>,
     @InjectModel(AgencyJoinRequest.name)
     private readonly requestModel: Model<AgencyJoinRequestDocument>,
+    @InjectModel(AgencyCreateRequest.name)
+    private readonly createRequestModel: Model<AgencyCreateRequestDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
     private readonly numericIds: NumericIdService,
@@ -131,6 +138,16 @@ export class AppAgenciesService {
       .lean()
       .exec();
 
+    // Surface a pending agency-creation request too — the My Agency
+    // empty state shows it as a "your request is under review" card.
+    const pendingCreateRequest = await this.createRequestModel
+      .findOne({
+        userId: userOid,
+        status: AgencyCreateRequestStatus.PENDING,
+      })
+      .lean()
+      .exec();
+
     const user = await this.userModel
       .findById(userOid)
       .select({ agencyPowers: 1 })
@@ -141,8 +158,25 @@ export class AppAgenciesService {
       member: member ?? null,
       agency: agency?.toJSON() ?? null,
       pendingRequest: pendingRequest ?? null,
+      pendingCreateRequest: pendingCreateRequest ?? null,
       powers: user?.agencyPowers ?? [],
     };
+  }
+
+  /**
+   * Top agencies by host count. Drives the My Agency empty state — when
+   * the user hasn't joined an agency yet we show the leaderboard so they
+   * can see what's popular and apply from there. Falls back to
+   * `totalDiamondsEarned` as a tiebreaker.
+   */
+  async topAgencies(limit = 5) {
+    const items = await this.agencyModel
+      .find({ status: AgencyStatus.ACTIVE })
+      .sort({ hostCount: -1, totalDiamondsEarned: -1, createdAt: -1 })
+      .limit(Math.min(50, Math.max(1, limit)))
+      .lean()
+      .exec();
+    return { items };
   }
 
   // ────────────────────────────────────────────────────────────
@@ -615,13 +649,195 @@ export class AppAgenciesService {
   }
 
   // ────────────────────────────────────────────────────────────
-  // Create-from-app
+  // Agency creation requests (user → admin review)
+  // ────────────────────────────────────────────────────────────
+
+  /**
+   * Submit an agency-creation request. ANY app user can submit one —
+   * the platform admin reviews and approves/rejects from the admin
+   * panel. Gates:
+   *   • caller must not already be a member of an agency,
+   *   • caller can't have more than one pending request at a time,
+   *   • the proposed code must not collide with an already-taken
+   *     code (we still let the request through if the colliding
+   *     agency is terminated, but flag it for the admin's review).
+   *
+   * The admin's approval is what actually creates the agency — see
+   * `AgenciesService.approveCreateRequest` on the admin-side service.
+   */
+  async submitCreateRequest(
+    userId: string,
+    input: {
+      name: string;
+      country?: string;
+      logoUrl: string;
+      applicantPhone: string;
+      applicantAddress: string;
+      idCardFrontUrl: string;
+      idCardBackUrl: string;
+    },
+  ): Promise<AgencyCreateRequestDocument> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new ForbiddenException('Not authenticated');
+    }
+    const userOid = new Types.ObjectId(userId);
+
+    // Already in an agency? Block — they'd have to leave first anyway.
+    const member = await this.memberModel
+      .findOne({ userId: userOid })
+      .lean()
+      .exec();
+    if (member) {
+      throw new ConflictException({
+        code: 'ALREADY_IN_AGENCY',
+        message: 'Leave your current agency before requesting to create one',
+      });
+    }
+
+    const name = input.name.trim();
+    if (name.length < 2) {
+      throw new BadRequestException({
+        code: 'INVALID_FIELDS',
+        message: 'Agency name must be at least 2 characters',
+      });
+    }
+
+    // Required KYC pieces — the form already disables Submit until
+    // these are present, but the API is the source of truth.
+    const logoUrl = input.logoUrl?.trim() ?? '';
+    const applicantPhone = input.applicantPhone?.trim() ?? '';
+    const applicantAddress = input.applicantAddress?.trim() ?? '';
+    const idFront = input.idCardFrontUrl?.trim() ?? '';
+    const idBack = input.idCardBackUrl?.trim() ?? '';
+    if (!logoUrl) {
+      throw new BadRequestException({
+        code: 'LOGO_REQUIRED',
+        message: 'Please upload an agency avatar',
+      });
+    }
+    if (!applicantPhone || !applicantAddress) {
+      throw new BadRequestException({
+        code: 'CONTACT_INFO_REQUIRED',
+        message: 'Phone number and address are required for review',
+      });
+    }
+    if (!idFront || !idBack) {
+      throw new BadRequestException({
+        code: 'ID_CARD_REQUIRED',
+        message:
+          'Front and back photos of your ID card are required for review',
+      });
+    }
+
+    // Derive a short, unique-ish code from the name. Strip non-alnum,
+    // uppercase, truncate to 16 chars. Append a numeric suffix until
+    // unique against existing agencies. The admin can rename on
+    // approval — this is just a placeholder identifier so the proposal
+    // shows up cleanly on the review screen.
+    const codeUpper = await this._deriveAgencyCode(name);
+
+    try {
+      return await this.createRequestModel.create({
+        userId: userOid,
+        status: AgencyCreateRequestStatus.PENDING,
+        name,
+        code: codeUpper,
+        description: '',
+        country: (input.country ?? 'BD').toUpperCase(),
+        contactEmail: '',
+        contactPhone: '',
+        logoUrl,
+        pitch: '',
+        applicantPhone,
+        applicantAddress,
+        idCardFrontUrl: idFront,
+        idCardBackUrl: idBack,
+      });
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        throw new ConflictException({
+          code: 'REQUEST_PENDING',
+          message: 'You already have a pending creation request',
+        });
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Build an A–Z0–9 code from the proposed name and ensure it doesn't
+   * collide with an existing agency. Falls back to a timestamped
+   * `AGENCY{N}` if the name has no usable characters (e.g. all
+   * non-Latin script).
+   */
+  private async _deriveAgencyCode(name: string): Promise<string> {
+    const base = (name.toUpperCase().match(/[A-Z0-9]+/g) ?? []).join('');
+    const seed = (base || 'AGENCY').slice(0, 12);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const candidate =
+        attempt === 0 ? seed : `${seed}${attempt + 1}`.slice(0, 16);
+      const taken = await this.agencyModel
+        .countDocuments({ code: candidate })
+        .exec();
+      if (!taken) return candidate;
+    }
+    // Extreme fallback — millisecond suffix is effectively unique.
+    return `${seed}${Date.now() % 100000}`.slice(0, 20);
+  }
+
+  /** User-initiated cancel of their own pending create request. */
+  async cancelMyCreateRequest(
+    userId: string,
+    requestId: string,
+  ): Promise<{ ok: true }> {
+    if (
+      !Types.ObjectId.isValid(userId) ||
+      !Types.ObjectId.isValid(requestId)
+    ) {
+      throw new NotFoundException('Request not found');
+    }
+    const req = await this.createRequestModel.findById(requestId).exec();
+    if (!req) throw new NotFoundException('Request not found');
+    if (!req.userId.equals(new Types.ObjectId(userId))) {
+      throw new ForbiddenException('Not your request');
+    }
+    if (req.status !== AgencyCreateRequestStatus.PENDING) {
+      throw new BadRequestException({
+        code: 'REQUEST_NOT_PENDING',
+        message: 'Request is already decided',
+      });
+    }
+    req.status = AgencyCreateRequestStatus.CANCELLED;
+    req.decidedAt = new Date();
+    await req.save();
+    return { ok: true };
+  }
+
+  /** Past create-requests for a user (mostly debug / "my history" use). */
+  async listMyCreateRequests(userId: string) {
+    if (!Types.ObjectId.isValid(userId)) return { items: [] as any[] };
+    const items = await this.createRequestModel
+      .find({ userId: new Types.ObjectId(userId) })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean()
+      .exec();
+    return { items };
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // Create-from-app (legacy: `agency.create` power path)
   // ────────────────────────────────────────────────────────────
 
   /**
    * Found a new agency from the mobile app. Gated on the user holding
    * the `agency.create` power. Caller becomes the owner of the new
    * agency. Code uniqueness is enforced by the existing unique index.
+   *
+   * @deprecated The primary creation path is now `submitCreateRequest`
+   * → admin review. This direct path stays for backward compatibility
+   * with users who already hold the `agency.create` power; new users
+   * should use the request flow.
    */
   async createFromApp(
     userId: string,
@@ -706,6 +922,7 @@ function _emptyMine() {
     member: null,
     agency: null,
     pendingRequest: null,
+    pendingCreateRequest: null,
     powers: [] as string[],
   };
 }

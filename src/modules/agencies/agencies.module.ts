@@ -10,6 +10,10 @@ import { AgenciesService } from './agencies.service';
 import { AppAgenciesController } from './app-agencies.controller';
 import { AppAgenciesService } from './app-agencies.service';
 import {
+  AgencyCreateRequest,
+  AgencyCreateRequestSchema,
+} from './schemas/agency-create-request.schema';
+import {
   AgencyJoinRequest,
   AgencyJoinRequestSchema,
 } from './schemas/agency-join-request.schema';
@@ -25,6 +29,10 @@ import { Agency, AgencySchema } from './schemas/agency.schema';
       { name: Agency.name, schema: AgencySchema },
       { name: AgencyMember.name, schema: AgencyMemberSchema },
       { name: AgencyJoinRequest.name, schema: AgencyJoinRequestSchema },
+      {
+        name: AgencyCreateRequest.name,
+        schema: AgencyCreateRequestSchema,
+      },
       // The app-facing service reads / writes `User.agencyPowers` and
       // exposes hydrated user info on the roster / requests responses.
       // We bring User in directly instead of going through UsersModule

@@ -32,6 +32,50 @@ export class SetMemberRoleDto {
   role!: AgencyMemberRole;
 }
 
+/**
+ * Simplified create-request payload. Mobile form collects only the
+ * agency name + country, a logo, plus the applicant's KYC trio
+ * (phone, address, ID card front, ID card back). Everything else
+ * (code, description, pitch, contact email/phone) is derived or
+ * skipped — the admin can fill in finer fields after approval.
+ */
+export class SubmitCreateRequestDto {
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  country?: string;
+
+  /** Agency avatar (Cloudinary URL from the upload endpoint). */
+  @IsString()
+  @MaxLength(500)
+  logoUrl!: string;
+
+  // ---- Applicant personal info (mandatory KYC for review) ----
+
+  @IsString()
+  @MaxLength(40)
+  applicantPhone!: string;
+
+  @IsString()
+  @MaxLength(500)
+  applicantAddress!: string;
+
+  /** Photo of the applicant's government ID — front side. Required. */
+  @IsString()
+  @MaxLength(500)
+  idCardFrontUrl!: string;
+
+  /** Photo of the applicant's government ID — back side. Required. */
+  @IsString()
+  @MaxLength(500)
+  idCardBackUrl!: string;
+}
+
 export class CreateMyAgencyDto {
   @IsString()
   @MinLength(2)

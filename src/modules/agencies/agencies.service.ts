@@ -14,6 +14,11 @@ import { CounterScope } from '../common/schemas/counter.schema';
 import { SystemConfigService } from '../system-config/system-config.service';
 import { UsersService } from '../users/users.service';
 import {
+  AgencyCreateRequest,
+  AgencyCreateRequestDocument,
+  AgencyCreateRequestStatus,
+} from './schemas/agency-create-request.schema';
+import {
   AgencyMember,
   AgencyMemberDocument,
   AgencyMemberRole,
@@ -46,6 +51,8 @@ export class AgenciesService {
     @InjectModel(Agency.name) private readonly agencyModel: Model<AgencyDocument>,
     @InjectModel(AgencyMember.name)
     private readonly memberModel: Model<AgencyMemberDocument>,
+    @InjectModel(AgencyCreateRequest.name)
+    private readonly createRequestModel: Model<AgencyCreateRequestDocument>,
     private readonly users: UsersService,
     private readonly numericIds: NumericIdService,
     private readonly config: SystemConfigService,
@@ -486,5 +493,181 @@ export class AgenciesService {
       )
       .exec();
     return { ok: true };
+  }
+
+  // ---------------- Agency creation requests (admin review) ----------------
+
+  async listCreateRequests(params: {
+    page?: number;
+    limit?: number;
+    status?: AgencyCreateRequestStatus;
+  }) {
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(100, Math.max(1, params.limit ?? 20));
+    const skip = (page - 1) * limit;
+    const filter: FilterQuery<AgencyCreateRequestDocument> = {};
+    if (params.status) filter.status = params.status;
+    const [items, total] = await Promise.all([
+      this.createRequestModel
+        .find(filter)
+        .sort({ status: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate(
+          'userId',
+          'username displayName avatarUrl numericId level isHost',
+        )
+        .lean()
+        .exec(),
+      this.createRequestModel.countDocuments(filter).exec(),
+    ]);
+    // Normalize the populated user `_id → id` so the admin panel can
+    // read consistent shapes (same fix the members list got).
+    const normalized = items.map((r: any) => {
+      const rawUser = r.userId;
+      const userObj =
+        rawUser && typeof rawUser === 'object'
+          ? {
+              ...rawUser,
+              id: rawUser._id?.toString(),
+              _id: rawUser._id?.toString(),
+            }
+          : rawUser?.toString();
+      return {
+        ...r,
+        id: r._id?.toString(),
+        _id: r._id?.toString(),
+        userId: userObj,
+        createdAgencyId: r.createdAgencyId?.toString(),
+      };
+    });
+    return { items: normalized, page, limit, total };
+  }
+
+  /**
+   * Approve an agency-creation request: creates the agency, makes the
+   * requester its owner, auto-promotes them to host. All-or-nothing —
+   * if the agency code collides at the unique-index level we throw
+   * 409 and the request stays pending so the admin can ask the user
+   * to pick a different code.
+   */
+  async approveCreateRequest(
+    requestId: string,
+    actorAdminId: string,
+    note: string,
+  ): Promise<{
+    request: AgencyCreateRequestDocument;
+    agency: AgencyDocument;
+  }> {
+    await this.assertFeatureEnabled();
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new NotFoundException('Request not found');
+    }
+    const req = await this.createRequestModel.findById(requestId).exec();
+    if (!req) throw new NotFoundException('Request not found');
+    if (req.status !== AgencyCreateRequestStatus.PENDING) {
+      throw new BadRequestException({
+        code: 'REQUEST_NOT_PENDING',
+        message: 'Request is already decided',
+      });
+    }
+
+    // Re-check membership at decision time — the user might have
+    // joined another agency between request submission and approval.
+    const conflictingMember = await this.memberModel
+      .findOne({ userId: req.userId })
+      .lean()
+      .exec();
+    if (conflictingMember) {
+      throw new ConflictException({
+        code: 'REQUESTER_ALREADY_IN_AGENCY',
+        message:
+          'Requester is now a member of another agency. Reject this request.',
+      });
+    }
+
+    const codeUpper = req.code.toUpperCase();
+    const codeTaken = await this.agencyModel
+      .countDocuments({ code: codeUpper })
+      .exec();
+    if (codeTaken) {
+      throw new ConflictException({
+        code: 'AGENCY_CODE_TAKEN',
+        message: `Agency code "${codeUpper}" is taken — ask the requester to pick a different code.`,
+      });
+    }
+
+    const agency = await this.numericIds.createWithId(
+      CounterScope.AGENCY,
+      (numericId) =>
+        this.agencyModel.create({
+          numericId,
+          name: req.name,
+          code: codeUpper,
+          description: req.description,
+          country: req.country,
+          contactEmail: req.contactEmail,
+          contactPhone: req.contactPhone,
+          // Proposed logo from the request carries over to the live
+          // agency — the admin would've already vetted it during
+          // review.
+          logoUrl: req.logoUrl,
+          status: AgencyStatus.ACTIVE,
+          hostCount: 1,
+          createdBy: Types.ObjectId.isValid(actorAdminId)
+            ? new Types.ObjectId(actorAdminId)
+            : null,
+        }),
+    );
+
+    await this.memberModel.create({
+      agencyId: agency._id,
+      userId: req.userId,
+      role: AgencyMemberRole.OWNER,
+      joinedAt: new Date(),
+    });
+
+    // Joining an agency makes you a host — apply that rule here too.
+    await this.users.ensureHostForAgency(
+      req.userId.toString(),
+      agency._id.toString(),
+      actorAdminId,
+    );
+
+    req.status = AgencyCreateRequestStatus.APPROVED;
+    req.decidedBy = Types.ObjectId.isValid(actorAdminId)
+      ? new Types.ObjectId(actorAdminId)
+      : null;
+    req.decidedAt = new Date();
+    req.decisionNote = note.trim();
+    req.createdAgencyId = agency._id;
+    await req.save();
+    return { request: req, agency };
+  }
+
+  async rejectCreateRequest(
+    requestId: string,
+    actorAdminId: string,
+    note: string,
+  ): Promise<AgencyCreateRequestDocument> {
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new NotFoundException('Request not found');
+    }
+    const req = await this.createRequestModel.findById(requestId).exec();
+    if (!req) throw new NotFoundException('Request not found');
+    if (req.status !== AgencyCreateRequestStatus.PENDING) {
+      throw new BadRequestException({
+        code: 'REQUEST_NOT_PENDING',
+        message: 'Request is already decided',
+      });
+    }
+    req.status = AgencyCreateRequestStatus.REJECTED;
+    req.decidedBy = Types.ObjectId.isValid(actorAdminId)
+      ? new Types.ObjectId(actorAdminId)
+      : null;
+    req.decidedAt = new Date();
+    req.decisionNote = note.trim();
+    await req.save();
+    return req;
   }
 }

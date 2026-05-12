@@ -21,6 +21,7 @@ import {
   UpdateAgencyDto,
   UpdateAgencyStatusDto,
 } from './dto/agency.dto';
+import { AgencyCreateRequestStatus } from './schemas/agency-create-request.schema';
 import { AgencyMemberRole } from './schemas/agency-member.schema';
 import { AgencyStatus } from './schemas/agency.schema';
 
@@ -171,5 +172,47 @@ export class AgenciesController {
     @CurrentAdmin() admin: AuthenticatedAdmin,
   ) {
     return this.agencies.removeMember(id, userId, admin);
+  }
+
+  // ----- Agency creation requests (review queue) -----
+
+  @RequirePermissions(PERMISSIONS.AGENCY_VIEW)
+  @Get('create-requests/all')
+  async listCreateRequests(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('status') status?: AgencyCreateRequestStatus,
+  ) {
+    return this.agencies.listCreateRequests({ page, limit, status });
+  }
+
+  @RequirePermissions(PERMISSIONS.AGENCY_MANAGE)
+  @Post('create-requests/:reqId/approve')
+  async approveCreateRequest(
+    @Param('reqId') reqId: string,
+    @Body() body: { note?: string },
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ) {
+    const { request, agency } = await this.agencies.approveCreateRequest(
+      reqId,
+      admin.adminId,
+      body.note ?? '',
+    );
+    return { request, agency };
+  }
+
+  @RequirePermissions(PERMISSIONS.AGENCY_MANAGE)
+  @Post('create-requests/:reqId/reject')
+  async rejectCreateRequest(
+    @Param('reqId') reqId: string,
+    @Body() body: { note?: string },
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ) {
+    const request = await this.agencies.rejectCreateRequest(
+      reqId,
+      admin.adminId,
+      body.note ?? '',
+    );
+    return { request };
   }
 }
