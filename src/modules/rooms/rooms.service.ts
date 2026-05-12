@@ -41,6 +41,10 @@ import {
   RoomRole,
 } from './schemas/room-member.schema';
 import {
+  CallRequest,
+  CallRequestDocument,
+} from './schemas/call-request.schema';
+import {
   RoomSeat,
   RoomSeatDocument,
 } from './schemas/room-seat.schema';
@@ -78,6 +82,8 @@ export class RoomsService implements OnModuleInit {
     private readonly chatModel: Model<RoomChatMessageDocument>,
     @InjectModel(LiveSession.name)
     private readonly liveSessionModel: Model<LiveSessionDocument>,
+    @InjectModel(CallRequest.name)
+    private readonly callRequestModel: Model<CallRequestDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly numericIds: NumericIdService,
     private readonly agora: AgoraService,
@@ -1872,6 +1878,252 @@ export class RoomsService implements OnModuleInit {
       },
     );
 
+    return { ok: true };
+  }
+
+  // ============== Call requests (host-broadcast only) ==============
+
+  /// TTL for a new call request — server-side cleanup happens via the
+  /// `expiresAt` TTL index on the schema. UI also drops requests older
+  /// than this when computing what to show, so a slow TTL sweep can't
+  /// leak stale requests into the host's manage sheet.
+  private static readonly CALL_REQUEST_TTL_MS = 5 * 60 * 1000;
+
+  /// Viewer fires a call request to join the host-broadcast stage as
+  /// an audio caller. Idempotent — the unique (roomId, userId) index
+  /// upserts a fresh `expiresAt` for an existing pending row so the
+  /// 5-minute window resets on the latest tap. The host's seat slots
+  /// are still capacity-gated when they approve, so this method
+  /// stays liberal about queuing requests.
+  async createCallRequest(
+    roomId: string,
+    requesterId: string,
+  ): Promise<{ request: Record<string, unknown> }> {
+    const room = await this.getOrThrow(roomId);
+    if (room.kind !== RoomKind.VIDEO) {
+      throw new BadRequestException({
+        code: 'NOT_VIDEO_ROOM',
+        message: 'Call requests are only valid for video rooms',
+      });
+    }
+    if (room.videoMode !== RoomVideoMode.HOST_BROADCAST) {
+      throw new BadRequestException({
+        code: 'NOT_HOST_BROADCAST',
+        message: 'Call requests only apply to host-broadcast rooms',
+      });
+    }
+    if (!Types.ObjectId.isValid(requesterId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user',
+      });
+    }
+    const requesterOid = new Types.ObjectId(requesterId);
+    if (room.ownerId.equals(requesterOid)) {
+      throw new BadRequestException({
+        code: 'OWNER_CANNOT_REQUEST',
+        message: 'Owner is already on stage',
+      });
+    }
+
+    // Reject if the user is already seated — taking a seat already
+    // gets them on the call, no request needed.
+    const seated = await this.seatModel
+      .exists({ roomId: room._id, userId: requesterOid })
+      .exec();
+    if (seated) {
+      throw new ConflictException({
+        code: 'ALREADY_ON_CALL',
+        message: 'You are already on a seat in this room',
+      });
+    }
+
+    const expiresAt = new Date(Date.now() + RoomsService.CALL_REQUEST_TTL_MS);
+    const doc = await this.callRequestModel
+      .findOneAndUpdate(
+        { roomId: room._id, userId: requesterOid },
+        { $set: { expiresAt }, $setOnInsert: { roomId: room._id, userId: requesterOid } },
+        { new: true, upsert: true },
+      )
+      .exec();
+
+    const requester = await this.userModel
+      .findById(requesterOid)
+      .select('username displayName avatarUrl numericId level')
+      .exec();
+
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.CALL_REQUEST_CREATED,
+      {
+        ...doc.toJSON(),
+        requester: requester?.toJSON() ?? null,
+      },
+    );
+
+    return {
+      request: { ...doc.toJSON(), requester: requester?.toJSON() ?? null },
+    };
+  }
+
+  /// Host (or admin) lists pending call requests for the room. Includes
+  /// requester profile fields so the manage-sheet rows render without
+  /// a second roundtrip per row.
+  async listCallRequests(roomId: string, actorId: string) {
+    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    const docs = await this.callRequestModel
+      .find({ roomId: room._id, expiresAt: { $gt: new Date() } })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec();
+    const requesterIds = docs.map((d) => d.userId);
+    const users = await this.userModel
+      .find({ _id: { $in: requesterIds } })
+      .select('username displayName avatarUrl numericId level')
+      .lean()
+      .exec();
+    const byId = new Map(users.map((u) => [String(u._id), u]));
+    const requests = docs.map((d) => ({
+      id: String(d._id),
+      roomId: String(d.roomId),
+      userId: String(d.userId),
+      expiresAt: d.expiresAt.toISOString(),
+      createdAt: (d as { createdAt?: Date }).createdAt?.toISOString() ?? null,
+      requester: (() => {
+        const u = byId.get(String(d.userId));
+        if (!u) return null;
+        return {
+          id: String(u._id),
+          username: (u as { username?: string }).username ?? null,
+          displayName: (u as { displayName?: string }).displayName ?? null,
+          avatarUrl: (u as { avatarUrl?: string }).avatarUrl ?? null,
+          numericId: (u as { numericId?: number }).numericId ?? null,
+          level: (u as { level?: number }).level ?? null,
+        };
+      })(),
+    }));
+    return { requests };
+  }
+
+  /// Host approves a call request. Drops the request row and fires a
+  /// SEAT_INVITED event for the target on the given seatIndex — same
+  /// flow as a host-initiated invite, so the receiver's existing
+  /// accept-invite sheet pops up. The caller picks the seat index
+  /// (e.g. the first empty unlocked seat) on the client side.
+  async approveCallRequest(
+    roomId: string,
+    actorId: string,
+    requestId: string,
+    seatIndex: number,
+  ) {
+    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new BadRequestException({
+        code: 'INVALID_REQUEST_ID',
+        message: 'Invalid request id',
+      });
+    }
+    const reqOid = new Types.ObjectId(requestId);
+    const req = await this.callRequestModel
+      .findOne({ _id: reqOid, roomId: room._id })
+      .exec();
+    if (!req) {
+      throw new NotFoundException({
+        code: 'REQUEST_NOT_FOUND',
+        message: 'Call request not found',
+      });
+    }
+    if (req.expiresAt.getTime() <= Date.now()) {
+      await this.callRequestModel.deleteOne({ _id: reqOid }).exec();
+      throw new BadRequestException({
+        code: 'REQUEST_EXPIRED',
+        message: 'Call request has expired',
+      });
+    }
+    // Hand off to inviteToSeat — it does seat-empty / seat-locked /
+    // user-in-room validation already, and emits SEAT_INVITED.
+    await this.inviteToSeat(
+      roomId,
+      actorId,
+      seatIndex,
+      String(req.userId),
+    );
+    await this.callRequestModel.deleteOne({ _id: reqOid }).exec();
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.CALL_REQUEST_RESOLVED,
+      {
+        requestId: String(reqOid),
+        roomId: room._id.toString(),
+        userId: String(req.userId),
+        status: 'approved',
+      },
+    );
+    return { ok: true };
+  }
+
+  /// Host denies a call request. Just drops the row + emits a
+  /// resolved event so the requester's client can clear local state.
+  async denyCallRequest(
+    roomId: string,
+    actorId: string,
+    requestId: string,
+  ) {
+    const room = await this.assertOwnerOrAdmin(roomId, actorId);
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new BadRequestException({
+        code: 'INVALID_REQUEST_ID',
+        message: 'Invalid request id',
+      });
+    }
+    const reqOid = new Types.ObjectId(requestId);
+    const req = await this.callRequestModel
+      .findOneAndDelete({ _id: reqOid, roomId: room._id })
+      .exec();
+    if (!req) {
+      // Already resolved/expired — return idempotent ok so the host's
+      // "deny" tap doesn't surface a spurious error if the requester
+      // canceled or the row TTL'd in the same tick.
+      return { ok: true };
+    }
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.CALL_REQUEST_RESOLVED,
+      {
+        requestId: String(reqOid),
+        roomId: room._id.toString(),
+        userId: String(req.userId),
+        status: 'denied',
+      },
+    );
+    return { ok: true };
+  }
+
+  /// Requester withdraws their own pending request. Same shape as deny
+  /// but the row must belong to the requester (host doesn't approve).
+  async cancelCallRequest(roomId: string, requesterId: string) {
+    const room = await this.getOrThrow(roomId);
+    if (!Types.ObjectId.isValid(requesterId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user',
+      });
+    }
+    const requesterOid = new Types.ObjectId(requesterId);
+    const req = await this.callRequestModel
+      .findOneAndDelete({ roomId: room._id, userId: requesterOid })
+      .exec();
+    if (!req) return { ok: true };
+    void this.realtime.emitToRoom(
+      room._id.toString(),
+      RealtimeEventType.CALL_REQUEST_RESOLVED,
+      {
+        requestId: String(req._id),
+        roomId: room._id.toString(),
+        userId: requesterId,
+        status: 'canceled',
+      },
+    );
     return { ok: true };
   }
 

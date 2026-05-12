@@ -51,6 +51,19 @@ export enum RealtimeEventType {
    *  the target shows the accept/reject prompt. */
   SEAT_INVITED = 'seat.invited',
 
+  /** A viewer fired a request to join the host's stage as an audio
+   *  caller (host-broadcast mode only). Sent to the entire room so
+   *  the host's manage-calls badge updates live and other admins see
+   *  the queue too. Payload: full CallRequest JSON with `requester`
+   *  hydrated (id, username, displayName, avatarUrl). */
+  CALL_REQUEST_CREATED = 'call_request.created',
+
+  /** A pending call request was resolved (approved, denied, canceled
+   *  by the requester, or expired). Receivers drop it from their
+   *  local list. Payload: `{ requestId, roomId, userId, status }`
+   *  where status is one of `'approved' | 'denied' | 'canceled' | 'expired'`. */
+  CALL_REQUEST_RESOLVED = 'call_request.resolved',
+
   /** A rocket has filled in this room and is launching now. */
   ROOM_ROCKET_LAUNCH = 'room.rocket.launch',
 

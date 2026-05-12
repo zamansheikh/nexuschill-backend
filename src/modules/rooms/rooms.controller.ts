@@ -332,6 +332,74 @@ export class RoomsController {
     return this.rooms.inviteToSeat(id, current.userId, seatIndex, userId);
   }
 
+  // ---------- Call requests (host-broadcast only) ----------
+
+  /// Viewer asks to join the host's stage as an audio caller. Body is
+  /// empty — the requester is the authenticated user, the room is
+  /// the path param. Idempotent: a second tap refreshes the TTL.
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/call-requests')
+  async createCallRequest(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.rooms.createCallRequest(id, current.userId);
+  }
+
+  /// Host / admin lists pending call requests for the room. Used to
+  /// populate the manage-calls bottom sheet's "Requests" tab.
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/call-requests')
+  async listCallRequests(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.rooms.listCallRequests(id, current.userId);
+  }
+
+  /// Host approves a pending request and routes the requester into
+  /// the standard SEAT_INVITED accept flow on the given seatIndex.
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/call-requests/:requestId/approve/:seatIndex')
+  async approveCallRequest(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('requestId') requestId: string,
+    @Param('seatIndex', ParseIntPipe) seatIndex: number,
+  ) {
+    return this.rooms.approveCallRequest(
+      id,
+      current.userId,
+      requestId,
+      seatIndex,
+    );
+  }
+
+  /// Host denies a pending request. Drops the row + emits a resolved
+  /// event so the requester's client can clear local state.
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/call-requests/:requestId/deny')
+  async denyCallRequest(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('requestId') requestId: string,
+  ) {
+    return this.rooms.denyCallRequest(id, current.userId, requestId);
+  }
+
+  /// Requester withdraws their own pending request.
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/call-requests/me')
+  async cancelCallRequest(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.rooms.cancelCallRequest(id, current.userId);
+  }
+
   // ---------- Admins ----------
 
   @UseGuards(JwtAuthGuard)

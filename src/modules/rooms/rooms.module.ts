@@ -13,6 +13,10 @@ import { RoomsController } from './rooms.controller';
 import { RoomsCron } from './rooms.cron';
 import { RoomsService } from './rooms.service';
 import {
+  CallRequest,
+  CallRequestSchema,
+} from './schemas/call-request.schema';
+import {
   LiveSession,
   LiveSessionSchema,
 } from './schemas/live-session.schema';
@@ -31,6 +35,7 @@ import { Room, RoomSchema } from './schemas/room.schema';
       { name: RoomSeat.name, schema: RoomSeatSchema },
       { name: RoomMember.name, schema: RoomMemberSchema },
       { name: RoomChatMessage.name, schema: RoomChatMessageSchema },
+      { name: CallRequest.name, schema: CallRequestSchema },
       { name: LiveSession.name, schema: LiveSessionSchema },
       // Read-only access to User for hydrating snapshots / blocked lists.
       // The full Users module isn't imported to avoid a circular dep.
