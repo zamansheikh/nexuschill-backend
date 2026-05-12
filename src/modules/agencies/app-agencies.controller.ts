@@ -26,10 +26,17 @@ import {
   CreateMyAgencyDto,
   DecideRequestDto,
   JoinRequestDto,
+  ManageCreateAgencyDto,
+  ManageDecideCreateRequestDto,
+  ManageSetAgencyStatusDto,
+  ManageUpdateAgencyDto,
   SetMemberRoleDto,
   SubmitCreateRequestDto,
 } from './dto/app-agency.dto';
+import { AgencyCreateRequestStatus } from './schemas/agency-create-request.schema';
 import { AgencyJoinRequestStatus } from './schemas/agency-join-request.schema';
+import { AgencyMemberRole } from './schemas/agency-member.schema';
+import { AgencyStatus } from './schemas/agency.schema';
 
 const MAX_AGENCY_ASSET_BYTES = 8 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -167,6 +174,143 @@ export class AppAgenciesController {
     return this.agencies.cancelMyCreateRequest(current.userId, reqId);
   }
 
+  // ─── Admin-lite (gated on `agency.manage` power) ─────────────
+  //
+  // Mirrors the admin panel's agency CRUD + create-request approval
+  // queue, scoped to a single user power. Every endpoint below
+  // re-checks the power in the service layer — the prefix itself is
+  // not a separate guard.
+
+  @Get('manage')
+  async manageList(
+    @CurrentUser() current: AuthenticatedUser,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('status') status?: AgencyStatus,
+    @Query('country') country?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.agencies.manageList(current.userId, {
+      page,
+      limit,
+      status,
+      country,
+      search,
+    });
+  }
+
+  @Get('manage/create-requests')
+  async manageListCreateRequests(
+    @CurrentUser() current: AuthenticatedUser,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('status') status?: AgencyCreateRequestStatus,
+  ) {
+    return this.agencies.manageListCreateRequests(current.userId, {
+      page,
+      limit,
+      status,
+    });
+  }
+
+  @Post('manage/create-requests/:reqId/approve')
+  async manageApproveCreateRequest(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('reqId') reqId: string,
+    @Body() dto: ManageDecideCreateRequestDto,
+  ) {
+    const { request, agency } = await this.agencies.manageApproveCreateRequest(
+      current.userId,
+      reqId,
+      dto.note ?? '',
+    );
+    return { request, agency };
+  }
+
+  @Post('manage/create-requests/:reqId/reject')
+  async manageRejectCreateRequest(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('reqId') reqId: string,
+    @Body() dto: ManageDecideCreateRequestDto,
+  ) {
+    const request = await this.agencies.manageRejectCreateRequest(
+      current.userId,
+      reqId,
+      dto.note ?? '',
+    );
+    return { request };
+  }
+
+  @Post('manage')
+  async manageCreate(
+    @CurrentUser() current: AuthenticatedUser,
+    @Body() dto: ManageCreateAgencyDto,
+  ) {
+    const agency = await this.agencies.manageCreate(current.userId, dto);
+    return { agency };
+  }
+
+  @Get('manage/:id')
+  async manageGet(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    const agency = await this.agencies.manageGet(current.userId, id);
+    return { agency };
+  }
+
+  @Patch('manage/:id')
+  async manageUpdate(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ManageUpdateAgencyDto,
+  ) {
+    const agency = await this.agencies.manageUpdate(current.userId, id, dto);
+    return { agency };
+  }
+
+  @Patch('manage/:id/status')
+  async manageSetStatus(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ManageSetAgencyStatusDto,
+  ) {
+    const agency = await this.agencies.manageSetStatus(
+      current.userId,
+      id,
+      dto.status,
+    );
+    return { agency };
+  }
+
+  /**
+   * Admin-lite transfer ownership — for users holding `agency.manage`
+   * who don't have to be a member of the agency themselves.
+   */
+  @Post('manage/:id/transfer-ownership')
+  async manageTransferOwnership(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { newOwnerUserId?: string; demoteTo?: string },
+  ) {
+    if (!body.newOwnerUserId) {
+      throw new BadRequestException({
+        code: 'MISSING_USER_ID',
+        message: 'newOwnerUserId is required',
+      });
+    }
+    const demoteTo =
+      body.demoteTo === 'member'
+        ? AgencyMemberRole.MEMBER
+        : AgencyMemberRole.ADMIN;
+    return this.agencies.manageTransferOwnership(
+      current.userId,
+      id,
+      body.newOwnerUserId,
+      demoteTo,
+    );
+  }
+
   // ─── Membership lifecycle ───────────────────────────────────
 
   @Post(':id/join')
@@ -260,6 +404,36 @@ export class AppAgenciesController {
     @Param('userId') userId: string,
   ) {
     return this.agencies.kickMember(id, userId, current.userId);
+  }
+
+  /**
+   * Owner-driven ownership transfer. Available to the current owner
+   * of the agency (anyone holding `agency.manage` should use
+   * `/agencies/manage/:id/transfer-ownership` instead, which doesn't
+   * require membership in the target agency).
+   */
+  @Post(':id/transfer-ownership')
+  async transferOwnership(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { newOwnerUserId?: string; demoteTo?: string },
+  ) {
+    if (!body.newOwnerUserId) {
+      throw new BadRequestException({
+        code: 'MISSING_USER_ID',
+        message: 'newOwnerUserId is required',
+      });
+    }
+    const demoteTo =
+      body.demoteTo === 'member'
+        ? AgencyMemberRole.MEMBER
+        : AgencyMemberRole.ADMIN;
+    return this.agencies.transferOwnership(
+      current.userId,
+      id,
+      body.newOwnerUserId,
+      demoteTo,
+    );
   }
 
   @Patch(':id/members/:userId/role')

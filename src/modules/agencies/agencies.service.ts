@@ -495,6 +495,62 @@ export class AgenciesService {
     return { ok: true };
   }
 
+  /**
+   * Atomic ownership transfer. The current owner of `agencyId` is
+   * demoted (default: to `admin` so they keep staff access), and
+   * `newOwnerUserId` — who must already be a member of the agency —
+   * is promoted to OWNER.
+   *
+   * No-op when `newOwnerUserId` already holds OWNER. Throws when the
+   * target isn't a member, or when the agency has no current owner
+   * (corrupted state — should be fixed via a member-add first).
+   */
+  async transferOwnership(
+    agencyId: string,
+    newOwnerUserId: string,
+    admin: AuthenticatedAdmin,
+    demoteTo: AgencyMemberRole = AgencyMemberRole.ADMIN,
+  ): Promise<{ ok: true }> {
+    if (!Types.ObjectId.isValid(newOwnerUserId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user id',
+      });
+    }
+    if (demoteTo === AgencyMemberRole.OWNER) {
+      throw new BadRequestException({
+        code: 'INVALID_DEMOTE_TARGET',
+        message: 'Cannot demote the current owner back to owner',
+      });
+    }
+    const agency = await this.findOneOr404(agencyId, admin);
+    const targetOid = new Types.ObjectId(newOwnerUserId);
+
+    const incoming = await this.memberModel
+      .findOne({ agencyId: agency._id, userId: targetOid })
+      .exec();
+    if (!incoming) {
+      throw new NotFoundException({
+        code: 'MEMBER_NOT_FOUND',
+        message:
+          'Target user is not a member of this agency. Add them as a member first.',
+      });
+    }
+    if (incoming.role === AgencyMemberRole.OWNER) return { ok: true };
+
+    const outgoing = await this.memberModel
+      .findOne({ agencyId: agency._id, role: AgencyMemberRole.OWNER })
+      .exec();
+    // No current owner: rare/corrupted state — promote without demoting.
+    if (outgoing) {
+      outgoing.role = demoteTo;
+      await outgoing.save();
+    }
+    incoming.role = AgencyMemberRole.OWNER;
+    await incoming.save();
+    return { ok: true };
+  }
+
   // ---------------- Agency creation requests (admin review) ----------------
 
   async listCreateRequests(params: {

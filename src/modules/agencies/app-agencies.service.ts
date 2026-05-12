@@ -915,6 +915,503 @@ export class AppAgenciesService {
     await this.users.ensureHostForAgency(userId, agency._id.toString());
     return { agency, member };
   }
+
+  // ────────────────────────────────────────────────────────────
+  // Admin-lite (in-app agency management for power-holders)
+  // ────────────────────────────────────────────────────────────
+  //
+  // Surfaced to users whose `agencyPowers` contains `agency.manage`.
+  // The mobile app exposes a "Management" card on the profile that
+  // pushes a dedicated page where these users can list every agency
+  // on the platform, edit details, terminate inactive ones, and act
+  // on the create-request review queue — the same things a platform
+  // admin can do from the web admin panel, scoped to this single
+  // power.
+
+  /** Guard for every admin-lite endpoint. */
+  private async _assertAgencyManagePower(actorId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(actorId)) {
+      throw new ForbiddenException('Not authenticated');
+    }
+    const u = await this.userModel
+      .findById(actorId)
+      .select({ agencyPowers: 1 })
+      .lean()
+      .exec();
+    if (!u?.agencyPowers?.includes('agency.manage')) {
+      throw new ForbiddenException({
+        code: 'NO_AGENCY_MANAGE_POWER',
+        message: 'You do not have permission to manage agencies',
+      });
+    }
+  }
+
+  /**
+   * Paginated, status-filterable list of every agency on the
+   * platform. Mirrors the admin-panel grid — the mobile UI uses it
+   * as the "All agencies" tab.
+   */
+  async manageList(
+    actorId: string,
+    params: {
+      page?: number;
+      limit?: number;
+      status?: AgencyStatus;
+      country?: string;
+      search?: string;
+    },
+  ) {
+    await this._assertAgencyManagePower(actorId);
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(50, Math.max(1, params.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const filter: FilterQuery<AgencyDocument> = {};
+    if (params.status) filter.status = params.status;
+    if (params.country) filter.country = params.country.toUpperCase();
+    if (params.search) {
+      const q = params.search.trim();
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escaped, 'i');
+      const or: FilterQuery<AgencyDocument>[] = [
+        { name: regex },
+        { code: regex },
+        { description: regex },
+      ];
+      if (/^\d{1,7}$/.test(q)) {
+        or.push({ numericId: parseInt(q, 10) });
+      }
+      filter.$or = or;
+    }
+
+    const [items, total] = await Promise.all([
+      this.agencyModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+        .exec(),
+      this.agencyModel.countDocuments(filter).exec(),
+    ]);
+    // `.lean()` skips the schema-level _id → id transform — emulate
+    // it here so the mobile model parses cleanly.
+    const normalized = items.map((a: any) => ({
+      ...a,
+      id: a._id?.toString(),
+      _id: a._id?.toString(),
+    }));
+    return { items: normalized, page, limit, total };
+  }
+
+  async manageGet(actorId: string, agencyId: string) {
+    await this._assertAgencyManagePower(actorId);
+    if (!Types.ObjectId.isValid(agencyId)) {
+      throw new NotFoundException('Agency not found');
+    }
+    const agency = await this.agencyModel.findById(agencyId).exec();
+    if (!agency) throw new NotFoundException('Agency not found');
+    return agency.toJSON();
+  }
+
+  /**
+   * Direct create from the app — used by the Management → Agency
+   * page's "+" action. Bypasses the review queue because the actor
+   * already holds the `agency.manage` power. The created agency has
+   * no auto-assigned owner; the actor can promote any user to owner
+   * separately if they want one.
+   */
+  async manageCreate(
+    actorId: string,
+    input: {
+      name: string;
+      code: string;
+      description?: string;
+      country?: string;
+      logoUrl?: string;
+      contactEmail?: string;
+      contactPhone?: string;
+      commissionRate?: number;
+    },
+  ) {
+    await this._assertAgencyManagePower(actorId);
+    const name = input.name.trim();
+    const codeUpper = input.code.trim().toUpperCase();
+    if (name.length < 2 || codeUpper.length < 2) {
+      throw new BadRequestException({
+        code: 'INVALID_FIELDS',
+        message: 'Name and code must be at least 2 characters',
+      });
+    }
+    if (!/^[A-Z0-9_-]+$/.test(codeUpper)) {
+      throw new BadRequestException({
+        code: 'INVALID_CODE',
+        message: 'Code may contain only letters, digits, _ and -',
+      });
+    }
+    const exists = await this.agencyModel
+      .countDocuments({ code: codeUpper })
+      .exec();
+    if (exists) {
+      throw new ConflictException({
+        code: 'AGENCY_CODE_TAKEN',
+        message: `Agency code "${codeUpper}" is already taken`,
+      });
+    }
+    const commission = input.commissionRate ?? 30;
+    if (commission < 0 || commission > 100) {
+      throw new BadRequestException({
+        code: 'INVALID_COMMISSION',
+        message: 'Commission rate must be between 0 and 100',
+      });
+    }
+    const agency = await this.numericIds.createWithId(
+      CounterScope.AGENCY,
+      (numericId) =>
+        this.agencyModel.create({
+          numericId,
+          name,
+          code: codeUpper,
+          description: input.description?.trim() ?? '',
+          country: (input.country ?? 'BD').toUpperCase(),
+          logoUrl: input.logoUrl?.trim() ?? '',
+          contactEmail: input.contactEmail?.trim() ?? '',
+          contactPhone: input.contactPhone?.trim() ?? '',
+          commissionRate: commission,
+          status: AgencyStatus.ACTIVE,
+          createdBy: null,
+        }),
+    );
+    return agency.toJSON();
+  }
+
+  /**
+   * Patch agency-level fields. `code` is intentionally not editable —
+   * it's used as the user-visible identifier and renaming would break
+   * external references. Status changes go through `manageSetStatus`.
+   */
+  async manageUpdate(
+    actorId: string,
+    agencyId: string,
+    patch: {
+      name?: string;
+      description?: string;
+      country?: string;
+      logoUrl?: string;
+      contactEmail?: string;
+      contactPhone?: string;
+      commissionRate?: number;
+    },
+  ) {
+    await this._assertAgencyManagePower(actorId);
+    if (!Types.ObjectId.isValid(agencyId)) {
+      throw new NotFoundException('Agency not found');
+    }
+    const agency = await this.agencyModel.findById(agencyId).exec();
+    if (!agency) throw new NotFoundException('Agency not found');
+    if (patch.name !== undefined) agency.name = patch.name.trim();
+    if (patch.description !== undefined) {
+      agency.description = patch.description.trim();
+    }
+    if (patch.country !== undefined) {
+      agency.country = patch.country.toUpperCase();
+    }
+    if (patch.logoUrl !== undefined) agency.logoUrl = patch.logoUrl.trim();
+    if (patch.contactEmail !== undefined) {
+      agency.contactEmail = patch.contactEmail.trim();
+    }
+    if (patch.contactPhone !== undefined) {
+      agency.contactPhone = patch.contactPhone.trim();
+    }
+    if (patch.commissionRate !== undefined) {
+      if (patch.commissionRate < 0 || patch.commissionRate > 100) {
+        throw new BadRequestException({
+          code: 'INVALID_COMMISSION',
+          message: 'Commission rate must be between 0 and 100',
+        });
+      }
+      agency.commissionRate = patch.commissionRate;
+    }
+    await agency.save();
+    return agency.toJSON();
+  }
+
+  /**
+   * Status transition: ACTIVE ↔ SUSPENDED ↔ TERMINATED. The mobile
+   * "delete" action calls this with TERMINATED — a soft-delete that
+   * preserves audit trail.
+   */
+  async manageSetStatus(
+    actorId: string,
+    agencyId: string,
+    status: AgencyStatus,
+  ) {
+    await this._assertAgencyManagePower(actorId);
+    if (!Types.ObjectId.isValid(agencyId)) {
+      throw new NotFoundException('Agency not found');
+    }
+    const agency = await this.agencyModel.findById(agencyId).exec();
+    if (!agency) throw new NotFoundException('Agency not found');
+    agency.status = status;
+    await agency.save();
+    return agency.toJSON();
+  }
+
+  /**
+   * Paginated create-request review queue — what the admin panel
+   * shows at `/admin/agencies/create-requests`. Includes the
+   * applicant's user info (name, avatar, numericId) so the mobile
+   * UI can render the row in one round-trip.
+   */
+  async manageListCreateRequests(
+    actorId: string,
+    params: {
+      page?: number;
+      limit?: number;
+      status?: AgencyCreateRequestStatus;
+    },
+  ) {
+    await this._assertAgencyManagePower(actorId);
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(50, Math.max(1, params.limit ?? 20));
+    const skip = (page - 1) * limit;
+    const filter: FilterQuery<AgencyCreateRequestDocument> = {};
+    if (params.status) filter.status = params.status;
+    const [items, total] = await Promise.all([
+      this.createRequestModel
+        .find(filter)
+        .sort({ status: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate(
+          'userId',
+          'username displayName avatarUrl numericId level isHost',
+        )
+        .lean()
+        .exec(),
+      this.createRequestModel.countDocuments(filter).exec(),
+    ]);
+    // Normalize the populated user `_id → id` so the mobile model
+    // parses consistently. Mirrors the admin panel's listCreateRequests.
+    const normalized = items.map((r: any) => {
+      const rawUser = r.userId;
+      const userObj =
+        rawUser && typeof rawUser === 'object'
+          ? {
+              ...rawUser,
+              id: rawUser._id?.toString(),
+              _id: rawUser._id?.toString(),
+            }
+          : rawUser?.toString();
+      return {
+        ...r,
+        id: r._id?.toString(),
+        _id: r._id?.toString(),
+        userId: userObj,
+        createdAgencyId: r.createdAgencyId?.toString(),
+      };
+    });
+    return { items: normalized, page, limit, total };
+  }
+
+  /**
+   * Approve a create-request from the app. Same effect as the admin
+   * panel's approve: an agency is created, the requester becomes its
+   * owner, and they're auto-promoted to host. Code collisions throw
+   * 409 so the request stays pending for follow-up.
+   */
+  async manageApproveCreateRequest(
+    actorId: string,
+    requestId: string,
+    note: string,
+  ): Promise<{
+    request: AgencyCreateRequestDocument;
+    agency: AgencyDocument;
+  }> {
+    await this._assertAgencyManagePower(actorId);
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new NotFoundException('Request not found');
+    }
+    const req = await this.createRequestModel.findById(requestId).exec();
+    if (!req) throw new NotFoundException('Request not found');
+    if (req.status !== AgencyCreateRequestStatus.PENDING) {
+      throw new BadRequestException({
+        code: 'REQUEST_NOT_PENDING',
+        message: 'Request is already decided',
+      });
+    }
+    const conflictingMember = await this.memberModel
+      .findOne({ userId: req.userId })
+      .lean()
+      .exec();
+    if (conflictingMember) {
+      throw new ConflictException({
+        code: 'REQUESTER_ALREADY_IN_AGENCY',
+        message:
+          'Requester is now a member of another agency. Reject this request.',
+      });
+    }
+    const codeUpper = req.code.toUpperCase();
+    const codeTaken = await this.agencyModel
+      .countDocuments({ code: codeUpper })
+      .exec();
+    if (codeTaken) {
+      throw new ConflictException({
+        code: 'AGENCY_CODE_TAKEN',
+        message: `Agency code "${codeUpper}" is taken — ask the requester to pick a different code.`,
+      });
+    }
+    const agency = await this.numericIds.createWithId(
+      CounterScope.AGENCY,
+      (numericId) =>
+        this.agencyModel.create({
+          numericId,
+          name: req.name,
+          code: codeUpper,
+          description: req.description,
+          country: req.country,
+          contactEmail: req.contactEmail,
+          contactPhone: req.contactPhone,
+          logoUrl: req.logoUrl,
+          status: AgencyStatus.ACTIVE,
+          hostCount: 1,
+          // No AdminUser-fk available for app actors; record stays null.
+          createdBy: null,
+        }),
+    );
+    await this.memberModel.create({
+      agencyId: agency._id,
+      userId: req.userId,
+      role: AgencyMemberRole.OWNER,
+      joinedAt: new Date(),
+    });
+    await this.users.ensureHostForAgency(
+      req.userId.toString(),
+      agency._id.toString(),
+      actorId,
+    );
+    req.status = AgencyCreateRequestStatus.APPROVED;
+    req.decidedAt = new Date();
+    req.decisionNote = note.trim();
+    req.createdAgencyId = agency._id;
+    // decidedBy expects an AdminUser ref; leave null for app actors.
+    req.decidedBy = null;
+    await req.save();
+    return { request: req, agency };
+  }
+
+  /**
+   * Atomic ownership transfer from the in-app Agency Management
+   * page. Gated on `agency.manage` — the actor doesn't have to be a
+   * member of the target agency. Current owner is demoted to ADMIN
+   * by default so they retain staff access; pass `demoteTo: 'member'`
+   * to strip that too.
+   */
+  async manageTransferOwnership(
+    actorId: string,
+    agencyId: string,
+    newOwnerUserId: string,
+    demoteTo: AgencyMemberRole = AgencyMemberRole.ADMIN,
+  ): Promise<{ ok: true }> {
+    await this._assertAgencyManagePower(actorId);
+    return this._transferOwnershipImpl(agencyId, newOwnerUserId, demoteTo);
+  }
+
+  /**
+   * Owner-driven ownership transfer from the agency moderation page.
+   * Available to the current owner only (and to super-power holders
+   * via `assertCanGovern`). Same outcome as `manageTransferOwnership`,
+   * different auth path so we don't conflate "I manage every agency"
+   * with "I own this one".
+   */
+  async transferOwnership(
+    actorId: string,
+    agencyId: string,
+    newOwnerUserId: string,
+    demoteTo: AgencyMemberRole = AgencyMemberRole.ADMIN,
+  ): Promise<{ ok: true }> {
+    if (!Types.ObjectId.isValid(agencyId)) {
+      throw new NotFoundException('Agency not found');
+    }
+    await this.assertCanGovern(new Types.ObjectId(agencyId), actorId);
+    return this._transferOwnershipImpl(agencyId, newOwnerUserId, demoteTo);
+  }
+
+  private async _transferOwnershipImpl(
+    agencyId: string,
+    newOwnerUserId: string,
+    demoteTo: AgencyMemberRole,
+  ): Promise<{ ok: true }> {
+    if (
+      !Types.ObjectId.isValid(agencyId) ||
+      !Types.ObjectId.isValid(newOwnerUserId)
+    ) {
+      throw new BadRequestException({
+        code: 'INVALID_IDS',
+        message: 'Invalid agency or user id',
+      });
+    }
+    if (demoteTo === AgencyMemberRole.OWNER) {
+      throw new BadRequestException({
+        code: 'INVALID_DEMOTE_TARGET',
+        message: 'Cannot demote the current owner back to owner',
+      });
+    }
+    const agencyOid = new Types.ObjectId(agencyId);
+    const agency = await this.agencyModel.findById(agencyOid).exec();
+    if (!agency) throw new NotFoundException('Agency not found');
+
+    const incoming = await this.memberModel
+      .findOne({
+        agencyId: agencyOid,
+        userId: new Types.ObjectId(newOwnerUserId),
+      })
+      .exec();
+    if (!incoming) {
+      throw new NotFoundException({
+        code: 'MEMBER_NOT_FOUND',
+        message:
+          'Target user is not a member of this agency. Add them as a member first.',
+      });
+    }
+    if (incoming.role === AgencyMemberRole.OWNER) return { ok: true };
+
+    const outgoing = await this.memberModel
+      .findOne({ agencyId: agencyOid, role: AgencyMemberRole.OWNER })
+      .exec();
+    if (outgoing) {
+      outgoing.role = demoteTo;
+      await outgoing.save();
+    }
+    incoming.role = AgencyMemberRole.OWNER;
+    await incoming.save();
+    return { ok: true };
+  }
+
+  async manageRejectCreateRequest(
+    actorId: string,
+    requestId: string,
+    note: string,
+  ): Promise<AgencyCreateRequestDocument> {
+    await this._assertAgencyManagePower(actorId);
+    if (!Types.ObjectId.isValid(requestId)) {
+      throw new NotFoundException('Request not found');
+    }
+    const req = await this.createRequestModel.findById(requestId).exec();
+    if (!req) throw new NotFoundException('Request not found');
+    if (req.status !== AgencyCreateRequestStatus.PENDING) {
+      throw new BadRequestException({
+        code: 'REQUEST_NOT_PENDING',
+        message: 'Request is already decided',
+      });
+    }
+    req.status = AgencyCreateRequestStatus.REJECTED;
+    req.decidedAt = new Date();
+    req.decisionNote = note.trim();
+    req.decidedBy = null;
+    await req.save();
+    return req;
+  }
 }
 
 function _emptyMine() {

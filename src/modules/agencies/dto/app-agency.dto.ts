@@ -1,14 +1,18 @@
 import {
   IsEmail,
   IsEnum,
+  IsNumber,
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 
 import { AgencyMemberRole } from '../schemas/agency-member.schema';
+import { AgencyStatus } from '../schemas/agency.schema';
 
 export class JoinRequestDto {
   @IsOptional()
@@ -74,6 +78,107 @@ export class SubmitCreateRequestDto {
   @IsString()
   @MaxLength(500)
   idCardBackUrl!: string;
+}
+
+/**
+ * Direct-create payload for the in-app Agency Management page —
+ * gated on `agency.manage` power. Mirrors the admin panel's create
+ * form: name + code + optional metadata + commission rate.
+ */
+export class ManageCreateAgencyDto {
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
+  name!: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(20)
+  @Matches(/^[A-Za-z0-9_-]+$/, {
+    message: 'code must be alphanumeric (also _ and -)',
+  })
+  code!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  logoUrl?: string;
+
+  @IsOptional()
+  @IsEmail()
+  contactEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  contactPhone?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  commissionRate?: number;
+}
+
+/** Edit form — `code` and `numericId` are intentionally not editable. */
+export class ManageUpdateAgencyDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  logoUrl?: string;
+
+  @IsOptional()
+  @IsEmail()
+  contactEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  contactPhone?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  commissionRate?: number;
+}
+
+export class ManageSetAgencyStatusDto {
+  @IsEnum(AgencyStatus)
+  status!: AgencyStatus;
+}
+
+export class ManageDecideCreateRequestDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
 }
 
 export class CreateMyAgencyDto {

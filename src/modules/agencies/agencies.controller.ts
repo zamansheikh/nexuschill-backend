@@ -174,6 +174,37 @@ export class AgenciesController {
     return this.agencies.removeMember(id, userId, admin);
   }
 
+  /**
+   * Transfer ownership of an agency to another member. Body:
+   * `{ newOwnerUserId, demoteTo? }` — `demoteTo` defaults to "admin"
+   * so the previous owner keeps staff access; pass "member" to fully
+   * step them down.
+   */
+  @RequirePermissions(PERMISSIONS.AGENCY_MANAGE)
+  @Post(':id/transfer-ownership')
+  async transferOwnership(
+    @Param('id') id: string,
+    @Body() body: { newOwnerUserId?: string; demoteTo?: string },
+    @CurrentAdmin() admin: AuthenticatedAdmin,
+  ) {
+    if (!body.newOwnerUserId) {
+      throw new BadRequestException({
+        code: 'MISSING_USER_ID',
+        message: 'newOwnerUserId is required',
+      });
+    }
+    const demoteTo =
+      body.demoteTo === 'member'
+        ? AgencyMemberRole.MEMBER
+        : AgencyMemberRole.ADMIN;
+    return this.agencies.transferOwnership(
+      id,
+      body.newOwnerUserId,
+      admin,
+      demoteTo,
+    );
+  }
+
   // ----- Agency creation requests (review queue) -----
 
   @RequirePermissions(PERMISSIONS.AGENCY_VIEW)
