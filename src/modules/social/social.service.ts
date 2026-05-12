@@ -197,6 +197,102 @@ export class SocialService {
     return this.listEdges('following', targetUserId, callerUserId, params);
   }
 
+  // ============== Friends (mutual follows) ==============
+
+  /**
+   * Count of mutual follows — users that the target follows AND that
+   * follow the target back. Uses two indexed `Follow.find()` calls and
+   * an in-memory intersection; cheap up to a few thousand follows per
+   * user. If counts ever blow past that we'd add a denormalized
+   * `friendsCount` field on the User doc, but the current product is
+   * nowhere near that scale.
+   */
+  async friendsCount(userId: string): Promise<number> {
+    if (!Types.ObjectId.isValid(userId)) return 0;
+    const ids = await this._friendIds(userId);
+    return ids.length;
+  }
+
+  /**
+   * Resolve the set of user ids that mutually follow `userId`. Shared
+   * by `friendsCount` and `listFriends`; intersection sorted by
+   * most-recently-followed direction so the friends list reads as
+   * "who became my friend most recently" rather than alphabetical.
+   */
+  private async _friendIds(userId: string): Promise<string[]> {
+    const oid = new Types.ObjectId(userId);
+    const [following, followers] = await Promise.all([
+      this.followModel
+        .find({ followerId: oid }, { followeeId: 1, createdAt: 1 })
+        .lean()
+        .exec(),
+      this.followModel
+        .find({ followeeId: oid }, { followerId: 1 })
+        .lean()
+        .exec(),
+    ]);
+    const followerSet = new Set(
+      followers.map((f) => f.followerId.toString()),
+    );
+    // Iterate the user's outgoing follows; keep those that have a
+    // matching incoming follow. Sort by `createdAt` desc to keep
+    // recent mutual-follows on top — matches the followers / following
+    // lists' ordering. (`createdAt` is added by `timestamps: true` on
+    // the Follow schema; the generated TS type doesn't surface it, so
+    // cast through `Record<string, unknown>`.)
+    const matched = (following as Array<Record<string, unknown>>)
+      .filter((f) =>
+        followerSet.has((f.followeeId as Types.ObjectId).toString()),
+      )
+      .sort((a, b) => {
+        const aAt = (a.createdAt as Date | undefined)?.getTime() ?? 0;
+        const bAt = (b.createdAt as Date | undefined)?.getTime() ?? 0;
+        return bAt - aAt;
+      })
+      .map((f) => (f.followeeId as Types.ObjectId).toString());
+    return matched;
+  }
+
+  /**
+   * Paginated list of friends (mutual follows) for `targetUserId`.
+   * Hydrated identically to followers / following so the mobile list
+   * page can render them with the same row component.
+   */
+  async listFriends(
+    targetUserId: string,
+    callerUserId: string | null,
+    params: { page?: number; limit?: number },
+  ) {
+    if (!Types.ObjectId.isValid(targetUserId)) {
+      throw new BadRequestException({
+        code: 'INVALID_ID',
+        message: 'Invalid id',
+      });
+    }
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(50, Math.max(1, params.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const ids = await this._friendIds(targetUserId);
+    const total = ids.length;
+    const slice = ids.slice(skip, skip + limit);
+    if (slice.length === 0) return { items: [], page, limit, total };
+
+    const users = await this.userModel
+      .find({ _id: { $in: slice.map((s) => new Types.ObjectId(s)) } })
+      .select('username displayName avatarUrl numericId level country')
+      .lean()
+      .exec();
+    // Preserve the friend order (recency) — `$in` doesn't guarantee
+    // order, so re-sort by the slice's index.
+    const byId = new Map(users.map((u) => [u._id.toString(), u]));
+    const ordered = slice
+      .map((id) => byId.get(id))
+      .filter((u): u is NonNullable<typeof u> => u != null);
+    const items = await this.hydrateUsers(ordered, callerUserId);
+    return { items, page, limit, total };
+  }
+
   /** Internal — branch picks the directional index. Pagination lives
    *  here too so both list endpoints share the same shape. */
   private async listEdges(

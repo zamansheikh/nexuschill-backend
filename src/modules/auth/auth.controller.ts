@@ -4,6 +4,7 @@ import { Request } from 'express';
 
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
+import { SocialService } from '../social/social.service';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import { GoogleLoginDto } from './dto/google-login.dto';
@@ -18,6 +19,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly users: UsersService,
+    private readonly social: SocialService,
   ) {}
 
   @Public()
@@ -100,7 +102,20 @@ export class AuthController {
   @Get('me')
   async me(@CurrentUser() current: AuthenticatedUser) {
     const user = await this.users.getByIdOrThrow(current.userId);
-    return { user };
+    // Mobile's AuthBloc refreshes through this endpoint on app boot
+    // and pull-to-refresh, so it has to carry the same enrichment the
+    // /users/me endpoint does — otherwise the Me tab's stat strip
+    // gets stuck at 0 for visitors / friends. followersCount /
+    // followingCount come for free off the denormalized fields on the
+    // user doc.
+    const [visitorsCount, friendsCount] = await Promise.all([
+      this.social.visitorsCount(current.userId),
+      this.social.friendsCount(current.userId),
+    ]);
+    const json = user.toJSON() as Record<string, unknown>;
+    json.visitorsCount = visitorsCount;
+    json.friendsCount = friendsCount;
+    return { user: json };
   }
 
   private shape(result: { user: unknown; tokens: unknown }) {

@@ -5,6 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PassportModule } from '@nestjs/passport';
 
+import { SocialModule } from '../social/social.module';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -29,6 +30,11 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     }),
     MongooseModule.forFeature([{ name: RefreshToken.name, schema: RefreshTokenSchema }]),
     UsersModule,
+    // Auth's `/auth/me` enriches the user payload with social counts
+    // (visitorsCount + friendsCount) so the mobile Me tab's stat strip
+    // gets fresh numbers from the same round-trip the AuthBloc uses
+    // for its user refresh.
+    SocialModule,
   ],
   controllers: [AuthController],
   providers: [

@@ -67,6 +67,18 @@ export class SocialController {
     return this.social.listFollowing(id, current.userId, { page, limit });
   }
 
+  /** Friends = users that mutually follow [id]. Public — anyone can see
+   *  any user's friends list, same exposure as followers / following. */
+  @Get('users/:id/friends')
+  async friends(
+    @CurrentUser() current: AuthenticatedUser,
+    @Param('id') id: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.social.listFriends(id, current.userId, { page, limit });
+  }
+
   // ============== Visitors ==============
 
   /** Record a profile visit. Called by the mobile app whenever the
