@@ -1778,6 +1778,7 @@ export class RoomsService implements OnModuleInit {
     actorId: string,
     seatIndex: number,
     targetUserId: string,
+    opts?: { source?: 'manual' | 'callRequest' },
   ) {
     const room = await this.assertOwnerOrAdmin(roomId, actorId);
     if (!Types.ObjectId.isValid(targetUserId)) {
@@ -1854,6 +1855,11 @@ export class RoomsService implements OnModuleInit {
         seatIndex,
         inviter: inviter?.toJSON() ?? null,
         target: target?.toJSON() ?? null,
+        // `source` lets the receiver tell apart a manual host-initiated
+        // invite (requires accept prompt) from an invite that was
+        // triggered by the receiver's own approved call request
+        // (auto-accept — they already opted in).
+        source: opts?.source ?? 'manual',
       },
     );
 
@@ -2041,12 +2047,15 @@ export class RoomsService implements OnModuleInit {
       });
     }
     // Hand off to inviteToSeat — it does seat-empty / seat-locked /
-    // user-in-room validation already, and emits SEAT_INVITED.
+    // user-in-room validation already, and emits SEAT_INVITED. The
+    // `callRequest` source tells the receiver's client to auto-accept
+    // since they already opted in by sending the request.
     await this.inviteToSeat(
       roomId,
       actorId,
       seatIndex,
       String(req.userId),
+      { source: 'callRequest' },
     );
     await this.callRequestModel.deleteOne({ _id: reqOid }).exec();
     void this.realtime.emitToRoom(
