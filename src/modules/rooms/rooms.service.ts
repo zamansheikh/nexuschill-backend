@@ -23,6 +23,7 @@ import { MagicBallService } from '../magic-ball/magic-ball.service';
 import { ContentFilterService } from '../moderation/content-filter.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RealtimeEventType } from '../realtime/realtime.types';
+import { SystemConfigService } from '../system-config/system-config.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CreateRoomDto, UpdateRoomSettingsDto } from './dto/room.dto';
 import {
@@ -91,6 +92,9 @@ export class RoomsService implements OnModuleInit {
     // hits the database — required for Google Play submission of
     // a live-streaming social app.
     private readonly contentFilter: ContentFilterService,
+    // System-config kill switch: when `liveRequiresAgency === true`,
+    // only `isHost` users can create or re-enter live rooms.
+    private readonly systemConfig: SystemConfigService,
   ) {}
 
   /**
@@ -219,6 +223,30 @@ export class RoomsService implements OnModuleInit {
    *   • video / multiSeat: micCount in {3, 5, 8} → 4 / 6 / 9 total
    *     seats including the owner. Default 5 (6-slot room).
    */
+  /**
+   * Shared gate for "is this user allowed to act as a live broadcaster
+   * right now?" — true when either `liveRequiresAgency` is off or the
+   * user holds `isHost`. Throws ForbiddenException with `HOST_ONLY`
+   * otherwise. Called from create / getOwn / enter so a non-host
+   * owner can't slip back into a live session through any of those
+   * paths.
+   */
+  private async _assertCanGoLive(userOid: Types.ObjectId): Promise<void> {
+    if (!(await this.systemConfig.liveRequiresAgency())) return;
+    const user = await this.userModel
+      .findById(userOid)
+      .select('isHost')
+      .lean()
+      .exec();
+    if (!user?.isHost) {
+      throw new ForbiddenException({
+        code: 'HOST_ONLY',
+        message:
+          'Only hosts can go live. Become a host by joining an agency or contacting an admin.',
+      });
+    }
+  }
+
   async createOrGetOwn(
     ownerId: string,
     input: CreateRoomDto,
@@ -228,6 +256,13 @@ export class RoomsService implements OnModuleInit {
     }
     const kind = input.kind ?? RoomKind.AUDIO;
     const ownerOid = new Types.ObjectId(ownerId);
+
+    // Live-requires-host kill switch — blocks brand-new opens AND
+    // CLOSED-room reactivations. The same helper is called from
+    // `getOwnRoom` (hides existing rooms from non-host owners) and
+    // `enter` (blocks the owner from re-entering to broadcast) so
+    // there's no path back to being live without `isHost`.
+    await this._assertCanGoLive(ownerOid);
 
     // Resolve videoMode + micCount per kind. Throws on illegal combos
     // so the bad-config doesn't reach disk.
@@ -451,8 +486,23 @@ export class RoomsService implements OnModuleInit {
   /** GET /rooms/me — the caller's own room (audio for now). */
   async getOwnRoom(ownerId: string, kind: RoomKind = RoomKind.AUDIO) {
     if (!Types.ObjectId.isValid(ownerId)) return null;
+    // When `liveRequiresAgency` is on and the caller isn't a host,
+    // hide their existing room from this endpoint. The mobile Mine
+    // tab swaps to the "START" CTA, which then trips the same gate
+    // inside `createOrGetOwn` with a clear error message. The room
+    // doc itself is preserved — flipping the flag back off (or
+    // promoting the user) restores access.
+    const ownerOid = new Types.ObjectId(ownerId);
+    if (await this.systemConfig.liveRequiresAgency()) {
+      const u = await this.userModel
+        .findById(ownerOid)
+        .select('isHost')
+        .lean()
+        .exec();
+      if (!u?.isHost) return null;
+    }
     const room = await this.roomModel
-      .findOne({ ownerId: new Types.ObjectId(ownerId), kind })
+      .findOne({ ownerId: ownerOid, kind })
       .exec();
     if (!room || room.status === RoomStatus.REMOVED) return null;
     return room;
@@ -742,6 +792,15 @@ export class RoomsService implements OnModuleInit {
       });
     }
     const userOid = new Types.ObjectId(userId);
+
+    // Owner entering their own room IS the "go live" act for both
+    // audio (persistent room, owner reconnects to broadcast) and
+    // video (owner publishes camera). Block when the kill switch
+    // is on and they've lost host status. Guests entering a host's
+    // room aren't going live themselves, so they're allowed.
+    if (room.ownerId.equals(userOid)) {
+      await this._assertCanGoLive(userOid);
+    }
 
     if (room.blockedUserIds.some((b) => b.equals(userOid))) {
       throw new ForbiddenException({

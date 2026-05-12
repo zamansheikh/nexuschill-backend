@@ -67,6 +67,21 @@ export class AppConfig {
    */
   @Prop({ type: Boolean, default: false })
   phoneLoginEnabled!: boolean;
+
+  /**
+   * When true, only users with `isHost === true` can create audio /
+   * video rooms. The path to becoming a host is the platform's
+   * existing channels — admin can flip the flag on the user record,
+   * or the user joins an agency (joining auto-promotes to host).
+   *
+   * When false, anyone can open a room (the historical default).
+   *
+   * Defaults to false so existing deployments don't suddenly block
+   * non-host users from going live without an explicit operator
+   * decision.
+   */
+  @Prop({ type: Boolean, default: false })
+  liveRequiresAgency!: boolean;
 }
 
 export const AppConfigSchema = SchemaFactory.createForClass(AppConfig);

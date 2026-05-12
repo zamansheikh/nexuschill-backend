@@ -6,6 +6,7 @@ import { CosmeticsModule } from '../cosmetics/cosmetics.module';
 import { FcmModule } from '../fcm/fcm.module';
 import { GiftsModule } from '../gifts/gifts.module';
 import { MagicBallModule } from '../magic-ball/magic-ball.module';
+import { SystemConfigModule } from '../system-config/system-config.module';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { RoomsAdminController } from './rooms-admin.controller';
 import { RoomsController } from './rooms.controller';
@@ -49,6 +50,9 @@ import { Room, RoomSchema } from './schemas/room.schema';
     // even when their socket is dead (screen-off / backgrounded): seat
     // invites, kicks, blocks. See docs/backend/08-background-and-push.md.
     FcmModule,
+    // Gates room creation on the `liveRequiresAgency` admin flag — when
+    // on, only `isHost` users can open audio / video rooms.
+    SystemConfigModule,
   ],
   controllers: [RoomsController, RoomsAdminController],
   providers: [RoomsService, RoomsCron],

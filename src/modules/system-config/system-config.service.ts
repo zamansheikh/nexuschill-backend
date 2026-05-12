@@ -11,6 +11,7 @@ interface UpdateAppConfigInput {
   agenciesEnabled?: boolean;
   emailLoginEnabled?: boolean;
   phoneLoginEnabled?: boolean;
+  liveRequiresAgency?: boolean;
 }
 
 /**
@@ -44,6 +45,9 @@ export class SystemConfigService {
     if (update.phoneLoginEnabled !== undefined) {
       set.phoneLoginEnabled = update.phoneLoginEnabled;
     }
+    if (update.liveRequiresAgency !== undefined) {
+      set.liveRequiresAgency = update.liveRequiresAgency;
+    }
     return this.model
       .findOneAndUpdate(
         { key: SINGLETON_KEY },
@@ -62,5 +66,14 @@ export class SystemConfigService {
   async agenciesEnabled(): Promise<boolean> {
     const cfg = await this.getConfig();
     return cfg.agenciesEnabled;
+  }
+
+  /**
+   * Used by the rooms module to gate room creation — when this is
+   * true, only `isHost` users may open an audio / video room.
+   */
+  async liveRequiresAgency(): Promise<boolean> {
+    const cfg = await this.getConfig();
+    return cfg.liveRequiresAgency;
   }
 }

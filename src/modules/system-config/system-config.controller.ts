@@ -23,6 +23,10 @@ class UpdateAppConfigDto {
   @IsOptional()
   @IsBoolean()
   phoneLoginEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  liveRequiresAgency?: boolean;
 }
 
 /**
@@ -44,6 +48,7 @@ export class SystemConfigController {
       agenciesEnabled: cfg.agenciesEnabled,
       emailLoginEnabled: cfg.emailLoginEnabled,
       phoneLoginEnabled: cfg.phoneLoginEnabled,
+      liveRequiresAgency: cfg.liveRequiresAgency,
     };
   }
 
