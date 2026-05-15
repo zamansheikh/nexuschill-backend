@@ -514,8 +514,17 @@ export class RoomsService implements OnModuleInit {
     return room;
   }
 
-  /** Public read by id or numericId (the latter is what users type). */
-  async getOrThrow(idOrNumeric: string): Promise<RoomDocument> {
+  /** Public read by id or numericId (the latter is what users type).
+   *
+   *  `opts.includeRemoved` opts the caller into seeing REMOVED rows —
+   *  used by the admin moderation paths (snapshot / restore) so a
+   *  removed room can still be inspected and brought back. The public
+   *  default keeps REMOVED rooms hidden so mobile clients can't
+   *  rejoin one mid-takedown. */
+  async getOrThrow(
+    idOrNumeric: string,
+    opts?: { includeRemoved?: boolean },
+  ): Promise<RoomDocument> {
     let room: RoomDocument | null = null;
     if (Types.ObjectId.isValid(idOrNumeric)) {
       room = await this.roomModel.findById(idOrNumeric).exec();
@@ -524,7 +533,9 @@ export class RoomsService implements OnModuleInit {
         .findOne({ numericId: parseInt(idOrNumeric, 10) })
         .exec();
     }
-    if (!room || room.status === RoomStatus.REMOVED) {
+    const removedHidden =
+      room?.status === RoomStatus.REMOVED && !opts?.includeRemoved;
+    if (!room || removedHidden) {
       throw new NotFoundException({
         code: 'ROOM_NOT_FOUND',
         message: 'Room not found',
@@ -534,9 +545,16 @@ export class RoomsService implements OnModuleInit {
   }
 
   /** Returns the room hydrated with author + seats + members for the
-   *  in-room screen. One round-trip; mobile client can paint from this. */
-  async getSnapshot(roomId: string) {
-    const room = await this.getOrThrow(roomId);
+   *  in-room screen. One round-trip; mobile client can paint from this.
+   *
+   *  `opts.includeRemoved` lets the admin detail page load a removed
+   *  room so moderators can review the audit fields and restore it.
+   *  Public callers (mobile join flow) leave this off so REMOVED → 404. */
+  async getSnapshot(
+    roomId: string,
+    opts?: { includeRemoved?: boolean },
+  ) {
+    const room = await this.getOrThrow(roomId, opts);
     const [seats, members, owner, seatDiamonds] = await Promise.all([
       this.seatModel
         .find({ roomId: room._id })
@@ -2537,7 +2555,7 @@ export class RoomsService implements OnModuleInit {
   // ============== Admin moderation ==============
 
   async adminRemove(roomId: string, reason: string, adminId?: string) {
-    const room = await this.getOrThrow(roomId);
+    const room = await this.getOrThrow(roomId, { includeRemoved: true });
     room.status = RoomStatus.REMOVED;
     room.removedReason = reason;
     if (adminId && Types.ObjectId.isValid(adminId)) {
@@ -2568,7 +2586,7 @@ export class RoomsService implements OnModuleInit {
    * misleading. Idempotent on already-ACTIVE rooms.
    */
   async adminRestore(roomId: string) {
-    const room = await this.getOrThrow(roomId);
+    const room = await this.getOrThrow(roomId, { includeRemoved: true });
     if (room.status === RoomStatus.ACTIVE) return room;
     room.status = RoomStatus.ACTIVE;
     room.removedReason = '';

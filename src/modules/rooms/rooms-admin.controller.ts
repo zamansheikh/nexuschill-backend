@@ -38,10 +38,14 @@ export class RoomsAdminController {
     return this.rooms.adminList({ page, limit, status, country, search });
   }
 
+  /** Admin detail snapshot. Opts into REMOVED rooms so moderators can
+   *  open a row they (or a teammate) just removed, review the audit
+   *  fields, and restore it. The public mobile snapshot stays strict —
+   *  REMOVED → 404. */
   @RequirePermissions(PERMISSIONS.ROOMS_VIEW)
   @Get(':id')
   async snapshot(@Param('id') id: string) {
-    return this.rooms.getSnapshot(id);
+    return this.rooms.getSnapshot(id, { includeRemoved: true });
   }
 
   @RequirePermissions(PERMISSIONS.ROOMS_CLOSE)
