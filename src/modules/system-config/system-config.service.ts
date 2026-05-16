@@ -13,6 +13,11 @@ interface UpdateAppConfigInput {
   phoneLoginEnabled?: boolean;
   liveRequiresAgency?: boolean;
   audioHostEndsLive?: boolean;
+  liveValidDayMinutes?: number;
+  liveValidMonthDays?: number;
+  liveValidDayReward?: number;
+  liveValidMonthBonus?: number;
+  liveValidRewardCurrency?: 'coins' | 'diamonds';
 }
 
 /**
@@ -51,6 +56,21 @@ export class SystemConfigService {
     }
     if (update.audioHostEndsLive !== undefined) {
       set.audioHostEndsLive = update.audioHostEndsLive;
+    }
+    if (update.liveValidDayMinutes !== undefined) {
+      set.liveValidDayMinutes = update.liveValidDayMinutes;
+    }
+    if (update.liveValidMonthDays !== undefined) {
+      set.liveValidMonthDays = update.liveValidMonthDays;
+    }
+    if (update.liveValidDayReward !== undefined) {
+      set.liveValidDayReward = update.liveValidDayReward;
+    }
+    if (update.liveValidMonthBonus !== undefined) {
+      set.liveValidMonthBonus = update.liveValidMonthBonus;
+    }
+    if (update.liveValidRewardCurrency !== undefined) {
+      set.liveValidRewardCurrency = update.liveValidRewardCurrency;
     }
     return this.model
       .findOneAndUpdate(

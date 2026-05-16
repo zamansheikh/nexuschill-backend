@@ -46,6 +46,15 @@ export enum TxnType {
   /** Coins debited when a user buys an SVIP tier directly via the
    *  SVIP page (instead of earning it via monthly points). */
   SVIP_PURCHASE = 'svip_purchase',
+  /** Daily auto-credit to a host who crossed the valid-day live
+   *  threshold the previous calendar day. At most one per
+   *  calendar date per host (audio + video kinds share the
+   *  reward — they only stack as separate valid-day counters in
+   *  the monthly accounting). */
+  LIVE_VALID_DAY_REWARD = 'live_valid_day_reward',
+  /** One-shot monthly bonus claimed from the Live Record page
+   *  once the host hits the valid-day threshold for the month. */
+  LIVE_VALID_MONTH_BONUS = 'live_valid_month_bonus',
 }
 
 export enum TxnStatus {

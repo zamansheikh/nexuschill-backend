@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Patch } from '@nestjs/common';
-import { IsBoolean, IsOptional } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, Min } from 'class-validator';
 
 import { Public } from '../../common/decorators/public.decorator';
 import { AdminOnly } from '../admin/admin-auth/decorators/admin-only.decorator';
@@ -31,6 +31,30 @@ class UpdateAppConfigDto {
   @IsOptional()
   @IsBoolean()
   audioHostEndsLive?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  liveValidDayMinutes?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  liveValidMonthDays?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  liveValidDayReward?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  liveValidMonthBonus?: number;
+
+  @IsOptional()
+  @IsIn(['coins', 'diamonds'])
+  liveValidRewardCurrency?: 'coins' | 'diamonds';
 }
 
 /**
@@ -54,6 +78,11 @@ export class SystemConfigController {
       phoneLoginEnabled: cfg.phoneLoginEnabled,
       liveRequiresAgency: cfg.liveRequiresAgency,
       audioHostEndsLive: cfg.audioHostEndsLive,
+      liveValidDayMinutes: cfg.liveValidDayMinutes,
+      liveValidMonthDays: cfg.liveValidMonthDays,
+      liveValidDayReward: cfg.liveValidDayReward,
+      liveValidMonthBonus: cfg.liveValidMonthBonus,
+      liveValidRewardCurrency: cfg.liveValidRewardCurrency,
     };
   }
 

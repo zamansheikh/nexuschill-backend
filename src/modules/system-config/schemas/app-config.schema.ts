@@ -99,6 +99,62 @@ export class AppConfig {
    */
   @Prop({ type: Boolean, default: false })
   audioHostEndsLive!: boolean;
+
+  // ============================================================
+  // Host live-record rewards (audio + video tracked separately)
+  // ============================================================
+
+  /**
+   * Minimum minutes of live in a single calendar day to count as a
+   * "valid day". Audio and video are tracked separately — a host
+   * who streams 30 min audio + 30 min video gets neither (each
+   * kind is below the threshold), but 45 min of audio alone gets
+   * one audio valid day.
+   *
+   * Default 45 (per platform spec).
+   */
+  @Prop({ type: Number, default: 45, min: 1 })
+  liveValidDayMinutes!: number;
+
+  /**
+   * Minimum valid days in a calendar month for the host to qualify
+   * for the monthly bonus + PDF certificate. Counted as the union
+   * of audio-valid and video-valid days (one valid day per
+   * calendar date regardless of kind).
+   *
+   * Default 18 (per platform spec).
+   */
+  @Prop({ type: Number, default: 18, min: 1 })
+  liveValidMonthDays!: number;
+
+  /**
+   * Reward credited automatically to the host's wallet at
+   * Asia/Dhaka midnight for each day they cross the valid-day
+   * threshold. Set to 0 to disable the daily credit while still
+   * tracking valid days for the monthly accounting. Currency is
+   * shared with the monthly bonus — see `liveValidRewardCurrency`.
+   */
+  @Prop({ type: Number, default: 0, min: 0 })
+  liveValidDayReward!: number;
+
+  /**
+   * One-shot bonus the host claims at the end of a calendar month
+   * once they hit `liveValidMonthDays`. Claim is manual from the
+   * mobile Live Record page; the same call generates the PDF
+   * certificate. Set to 0 to disable the bonus while still
+   * generating the PDF on claim.
+   */
+  @Prop({ type: Number, default: 0, min: 0 })
+  liveValidMonthBonus!: number;
+
+  /**
+   * Currency for both the daily reward and the monthly bonus —
+   * `coins` (the platform spending currency) or `diamonds`
+   * (host earning currency redeemable for withdrawals). Default
+   * `coins` because that's the in-app sink most hosts care about.
+   */
+  @Prop({ type: String, enum: ['coins', 'diamonds'], default: 'coins' })
+  liveValidRewardCurrency!: 'coins' | 'diamonds';
 }
 
 export const AppConfigSchema = SchemaFactory.createForClass(AppConfig);

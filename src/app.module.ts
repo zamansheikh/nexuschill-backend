@@ -36,6 +36,7 @@ import { RocketModule } from './modules/rocket/rocket.module';
 import { RoomEmojisModule } from './modules/room-emojis/room-emojis.module';
 import { RoomSupportModule } from './modules/room-support/room-support.module';
 import { HonorsModule } from './modules/honors/honors.module';
+import { LiveRecordModule } from './modules/live-record/live-record.module';
 import { RankingsModule } from './modules/rankings/rankings.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
 import { SearchModule } from './modules/search/search.module';
@@ -123,6 +124,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     MomentsModule,
     RealtimeModule,
     RoomsModule,
+    LiveRecordModule,
     RoomSupportModule,
     MessagesModule,
     FcmModule,
