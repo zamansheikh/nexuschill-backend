@@ -12,6 +12,7 @@ interface UpdateAppConfigInput {
   emailLoginEnabled?: boolean;
   phoneLoginEnabled?: boolean;
   liveRequiresAgency?: boolean;
+  audioHostEndsLive?: boolean;
 }
 
 /**
@@ -48,6 +49,9 @@ export class SystemConfigService {
     if (update.liveRequiresAgency !== undefined) {
       set.liveRequiresAgency = update.liveRequiresAgency;
     }
+    if (update.audioHostEndsLive !== undefined) {
+      set.audioHostEndsLive = update.audioHostEndsLive;
+    }
     return this.model
       .findOneAndUpdate(
         { key: SINGLETON_KEY },
@@ -75,5 +79,17 @@ export class SystemConfigService {
   async liveRequiresAgency(): Promise<boolean> {
     const cfg = await this.getConfig();
     return cfg.liveRequiresAgency;
+  }
+
+  /**
+   * Used by the rooms module to decide whether the audio room should
+   * be torn down when the host walks away — explicit leave OR
+   * heartbeat stale past the grace window. Mirrors video-room
+   * behaviour when on; leaves audio rooms as a persistent venue when
+   * off.
+   */
+  async audioHostEndsLive(): Promise<boolean> {
+    const cfg = await this.getConfig();
+    return cfg.audioHostEndsLive;
   }
 }

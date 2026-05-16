@@ -810,21 +810,34 @@ export class RoomsService implements OnModuleInit {
       throw new BadRequestException({ code: 'INVALID_USER_ID', message: 'Invalid user' });
     }
     const room = await this.getOrThrow(roomId);
+    const userOid = new Types.ObjectId(userId);
+
+    // Owner entering their own room IS the "go live" act for both
+    // audio (persistent room, owner reconnects to broadcast) and
+    // video (owner publishes camera). When the room is CLOSED that
+    // entry is ALSO a reactivation — mirrors `createOrGetOwn`'s
+    // CLOSED branch so the host's "ENTER" tile on the Mine tab
+    // works after the audioHostEndsLive sweep auto-closes their
+    // room (or after they left with that flag on). Block when the
+    // live-requires-host kill switch is on. Guests entering a
+    // host's room aren't going live themselves, so they're allowed
+    // — but a guest hitting a CLOSED room still gets ROOM_INACTIVE
+    // below.
+    if (room.ownerId.equals(userOid)) {
+      if (room.status === RoomStatus.CLOSED) {
+        await this._assertCanGoLive(userOid);
+        room.status = RoomStatus.ACTIVE;
+        await room.save();
+      } else {
+        await this._assertCanGoLive(userOid);
+      }
+    }
+
     if (room.status !== RoomStatus.ACTIVE) {
       throw new ForbiddenException({
         code: 'ROOM_INACTIVE',
         message: 'Room is closed',
       });
-    }
-    const userOid = new Types.ObjectId(userId);
-
-    // Owner entering their own room IS the "go live" act for both
-    // audio (persistent room, owner reconnects to broadcast) and
-    // video (owner publishes camera). Block when the kill switch
-    // is on and they've lost host status. Guests entering a host's
-    // room aren't going live themselves, so they're allowed.
-    if (room.ownerId.equals(userOid)) {
-      await this._assertCanGoLive(userOid);
     }
 
     if (room.blockedUserIds.some((b) => b.equals(userOid))) {
@@ -1054,18 +1067,25 @@ export class RoomsService implements OnModuleInit {
       );
     }
 
-    // Video-room close-on-host-leave: when the room's owner leaves a
-    // video room, mark the room CLOSED, emit ROOM_CLOSED to every
-    // remaining member, and evict their presence rows. Mirrors the
-    // typical livestream behaviour — a video room is the host's
-    // session, not a persistent venue. Audio rooms are untouched
-    // (they're a "venue" that stays alive when the host steps away).
+    // Close-on-host-leave: when the room's owner leaves we mark the
+    // room CLOSED, broadcast ROOM_CLOSED to every remaining member,
+    // and evict their presence rows. Mirrors typical livestream
+    // behaviour.
+    //
+    //   • Video rooms ALWAYS close on host-leave — the room is
+    //     literally the host's session, not a venue.
+    //   • Audio rooms close only when the admin-tunable
+    //     `audioHostEndsLive` flag is on. Otherwise they remain as a
+    //     persistent venue that survives the host stepping away —
+    //     the historical default.
     if (
-      room.kind === RoomKind.VIDEO &&
       room.ownerId.equals(userOid) &&
-      room.status === RoomStatus.ACTIVE
+      room.status === RoomStatus.ACTIVE &&
+      (room.kind === RoomKind.VIDEO ||
+        (room.kind === RoomKind.AUDIO &&
+          (await this.systemConfig.audioHostEndsLive())))
     ) {
-      await this.closeVideoRoomOnHostLeave(room);
+      await this.closeRoomOnHostLeave(room);
     }
 
     return { ok: true };
@@ -1203,24 +1223,31 @@ export class RoomsService implements OnModuleInit {
   static readonly HOST_HEARTBEAT_GRACE_MS = 2 * 60 * 1000;
 
   /**
-   * Sweep for video rooms where the host's heartbeat has gone
-   * stale and close them. Called by `RoomsCron` every 30s. Audio
-   * rooms are intentionally skipped — they're "venues" that
-   * survive a host stepping away, only video rooms are session-
-   * scoped to the host.
+   * Sweep for rooms where the host's heartbeat has gone stale and
+   * close them. Called by `RoomsCron` every 30s.
+   *
+   * Always sweeps VIDEO rooms (they're literally session-scoped to
+   * the host). Also sweeps AUDIO rooms when the admin-tunable
+   * `audioHostEndsLive` flag is on — otherwise audio rooms are
+   * skipped because they're a "venue" that survives a host stepping
+   * away.
    *
    * Returns the number of rooms closed so the cron can log
    * meaningful activity.
    */
   async sweepStaleHostRooms(): Promise<number> {
     const cutoff = new Date(Date.now() - RoomsService.HOST_HEARTBEAT_GRACE_MS);
-    const liveVideoRooms = await this.roomModel
-      .find({ kind: RoomKind.VIDEO, status: RoomStatus.ACTIVE })
-      .select({ _id: 1, ownerId: 1 })
+    const kinds: RoomKind[] = [RoomKind.VIDEO];
+    if (await this.systemConfig.audioHostEndsLive()) {
+      kinds.push(RoomKind.AUDIO);
+    }
+    const liveRooms = await this.roomModel
+      .find({ kind: { $in: kinds }, status: RoomStatus.ACTIVE })
+      .select({ _id: 1, ownerId: 1, kind: 1 })
       .lean()
       .exec();
     let closed = 0;
-    for (const room of liveVideoRooms) {
+    for (const room of liveRooms) {
       const hostMember = await this.memberModel
         .findOne({ roomId: room._id, userId: room.ownerId })
         .select({ lastSeenAt: 1 })
@@ -1237,18 +1264,28 @@ export class RoomsService implements OnModuleInit {
       const full = await this.roomModel.findById(room._id).exec();
       if (!full) continue;
       try {
-        await this.closeVideoRoomOnHostLeave(full);
+        await this.closeRoomOnHostLeave(full);
         closed += 1;
       } catch (err: any) {
         this.logger.warn(
-          `Auto-close failed for video room ${room._id.toString()}: ${err?.message ?? err}`,
+          `Auto-close failed for ${room.kind} room ${room._id.toString()}: ${err?.message ?? err}`,
         );
       }
     }
     return closed;
   }
 
-  private async closeVideoRoomOnHostLeave(room: RoomDocument): Promise<void> {
+  /**
+   * Mark a room CLOSED because the host walked away. Evicts every
+   * remaining member's presence row, frees any seats they held, and
+   * broadcasts ROOM_CLOSED so clients can pop the room page.
+   *
+   * Kind-agnostic — same cleanup applies to video rooms (always) and
+   * audio rooms (when `audioHostEndsLive` is on). The room document
+   * itself isn't deleted; keeping the row preserves gift history /
+   * chat scrollback the host might browse later.
+   */
+  private async closeRoomOnHostLeave(room: RoomDocument): Promise<void> {
     await this.roomModel
       .updateOne(
         { _id: room._id },

@@ -82,6 +82,23 @@ export class AppConfig {
    */
   @Prop({ type: Boolean, default: false })
   liveRequiresAgency!: boolean;
+
+  /**
+   * When true, an audio room becomes session-scoped to its host —
+   * same behaviour video rooms always have. The host walking away
+   * (explicit `leave` OR heartbeat stalling past the grace window)
+   * closes the room, evicts every remaining member with a
+   * `ROOM_CLOSED { reason: 'host_left' }` broadcast, and frees the
+   * seats.
+   *
+   * When false (the default), audio rooms behave as a persistent
+   * "venue" — viewers stay inside even when the host steps away,
+   * matching the historical behaviour. Toggle is meant for product
+   * configurations where the host's voice IS the room, and an empty
+   * room with no host should just close.
+   */
+  @Prop({ type: Boolean, default: false })
+  audioHostEndsLive!: boolean;
 }
 
 export const AppConfigSchema = SchemaFactory.createForClass(AppConfig);

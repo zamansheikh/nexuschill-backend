@@ -27,6 +27,10 @@ class UpdateAppConfigDto {
   @IsOptional()
   @IsBoolean()
   liveRequiresAgency?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  audioHostEndsLive?: boolean;
 }
 
 /**
@@ -49,6 +53,7 @@ export class SystemConfigController {
       emailLoginEnabled: cfg.emailLoginEnabled,
       phoneLoginEnabled: cfg.phoneLoginEnabled,
       liveRequiresAgency: cfg.liveRequiresAgency,
+      audioHostEndsLive: cfg.audioHostEndsLive,
     };
   }
 
